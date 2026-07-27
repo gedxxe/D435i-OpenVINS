@@ -1,0 +1,34 @@
+%YAML:1.0
+# INVALID PLACEHOLDER VALUES. Generate/review unit-specific factory values
+# with ovrs_inspect, then use scripts/prepare_bootstrap_config.sh. Do not edit
+# this tracked template into a runnable configuration. The ignored local
+# camera file must carry the same calibration_state and calibrated_serial as
+# its main configuration.
+# OpenVINS v2.7 reads T_imu_cam. It maps camera coordinates into IMU
+# coordinates (rotation camera-to-IMU; camera origin expressed in IMU).
+cam0:
+  T_imu_cam:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [1]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [1.0, 1.0, 0.0, 0.0]
+  resolution: [848, 480]
+  timeshift_cam_imu: 0.0
+cam1:
+  T_imu_cam:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [0]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [1.0, 1.0, 0.0, 0.0]
+  resolution: [848, 480]
+  timeshift_cam_imu: 0.0

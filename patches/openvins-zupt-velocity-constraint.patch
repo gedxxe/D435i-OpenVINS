@@ -1,0 +1,278 @@
+diff --git a/ov_msckf/src/core/VioManager.cpp b/ov_msckf/src/core/VioManager.cpp
+index 6a0d7b9..8e904c5 100644
+--- a/ov_msckf/src/core/VioManager.cpp
++++ b/ov_msckf/src/core/VioManager.cpp
+@@ -159,7 +159,9 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
+   if (params.try_zupt) {
+     updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
+                                                         propagator, params.gravity_mag, params.zupt_max_velocity,
+-                                                        params.zupt_noise_multiplier, params.zupt_max_disparity);
++                                                        params.zupt_noise_multiplier, params.zupt_max_disparity,
++                                                        params.zupt_constrain_velocity, params.zupt_velocity_noise,
++                                                        params.zupt_min_stationary_time);
+   }
+ }
+ 
+@@ -206,7 +208,9 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
+     if (params.try_zupt) {
+       updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
+                                                           propagator, params.gravity_mag, params.zupt_max_velocity,
+-                                                          params.zupt_noise_multiplier, params.zupt_max_disparity);
++                                                          params.zupt_noise_multiplier, params.zupt_max_disparity,
++                                                          params.zupt_constrain_velocity, params.zupt_velocity_noise,
++                                                          params.zupt_min_stationary_time);
+     }
+     PRINT_WARNING(RED "[SIM]: casting our tracker to a TrackSIM object!\n" RESET);
+   }
+diff --git a/ov_msckf/src/core/VioManagerOptions.h b/ov_msckf/src/core/VioManagerOptions.h
+index 0df7d15..5a2a626 100644
+--- a/ov_msckf/src/core/VioManagerOptions.h
++++ b/ov_msckf/src/core/VioManagerOptions.h
+@@ -94,6 +94,15 @@ struct VioManagerOptions {
+   /// If we should only use the zupt at the very beginning static initialization phase
+   bool zupt_only_at_beginning = false;
+ 
++  /// If a visually-confirmed stationary interval should constrain velocity
++  bool zupt_constrain_velocity = false;
++
++  /// Standard deviation of the zero-velocity pseudo measurement (m/s)
++  double zupt_velocity_noise = 0.05;
++
++  /// Minimum low-disparity interval required before constraining velocity (s)
++  double zupt_min_stationary_time = 0.25;
++
+   /// If we should record the timing performance to file
+   bool record_timing_information = false;
+ 
+@@ -117,6 +126,9 @@ struct VioManagerOptions {
+       parser->parse_config("zupt_noise_multiplier", zupt_noise_multiplier);
+       parser->parse_config("zupt_max_disparity", zupt_max_disparity);
+       parser->parse_config("zupt_only_at_beginning", zupt_only_at_beginning);
++      parser->parse_config("zupt_constrain_velocity", zupt_constrain_velocity, false);
++      parser->parse_config("zupt_velocity_noise", zupt_velocity_noise, false);
++      parser->parse_config("zupt_min_stationary_time", zupt_min_stationary_time, false);
+       parser->parse_config("record_timing_information", record_timing_information);
+       parser->parse_config("record_timing_filepath", record_timing_filepath);
+     }
+@@ -126,6 +138,9 @@ struct VioManagerOptions {
+     PRINT_DEBUG("  - zupt_noise_multiplier: %.2f\n", zupt_noise_multiplier);
+     PRINT_DEBUG("  - zupt_max_disparity: %.4f\n", zupt_max_disparity);
+     PRINT_DEBUG("  - zupt_only_at_beginning?: %d\n", zupt_only_at_beginning);
++    PRINT_DEBUG("  - zupt constrain velocity?: %d\n", zupt_constrain_velocity);
++    PRINT_DEBUG("  - zupt velocity noise: %.4f\n", zupt_velocity_noise);
++    PRINT_DEBUG("  - zupt minimum stationary time: %.3f\n", zupt_min_stationary_time);
+     PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
+     PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
+   }
+diff --git a/ov_msckf/src/update/UpdaterZeroVelocity.cpp b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
+index 3c55846..b29f545 100644
+--- a/ov_msckf/src/update/UpdaterZeroVelocity.cpp
++++ b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
+@@ -35,15 +35,26 @@
+ #include <boost/date_time/posix_time/posix_time.hpp>
+ #include <boost/math/distributions/chi_squared.hpp>
+ 
++#include <stdexcept>
++
+ using namespace ov_core;
+ using namespace ov_type;
+ using namespace ov_msckf;
+ 
+ UpdaterZeroVelocity::UpdaterZeroVelocity(UpdaterOptions &options, NoiseManager &noises, std::shared_ptr<ov_core::FeatureDatabase> db,
+                                          std::shared_ptr<Propagator> prop, double gravity_mag, double zupt_max_velocity,
+-                                         double zupt_noise_multiplier, double zupt_max_disparity)
++                                         double zupt_noise_multiplier, double zupt_max_disparity, bool constrain_velocity,
++                                         double velocity_noise, double min_stationary_time)
+     : _options(options), _noises(noises), _db(db), _prop(prop), _zupt_max_velocity(zupt_max_velocity),
+-      _zupt_noise_multiplier(zupt_noise_multiplier), _zupt_max_disparity(zupt_max_disparity) {
++      _zupt_noise_multiplier(zupt_noise_multiplier), _zupt_max_disparity(zupt_max_disparity),
++      _constrain_velocity(constrain_velocity), _velocity_noise(velocity_noise), _min_stationary_time(min_stationary_time) {
++
++  if (_zupt_max_velocity <= 0.0 || _zupt_noise_multiplier <= 0.0 || _zupt_max_disparity <= 0.0) {
++    throw std::invalid_argument("ZUPT velocity, noise multiplier, and disparity limits must be positive");
++  }
++  if (_constrain_velocity && (_velocity_noise <= 0.0 || _min_stationary_time <= 0.0)) {
++    throw std::invalid_argument("ZUPT velocity noise and minimum stationary time must be positive");
++  }
+ 
+   // Gravity
+   _gravity << 0.0, 0.0, gravity_mag;
+@@ -67,12 +78,14 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+   // Return if we don't have any imu data yet
+   if (imu_data.empty()) {
+     last_zupt_state_timestamp = 0.0;
++    stationary_candidate_timestamp = 0.0;
+     return false;
+   }
+ 
+   // Return if the state is already at the desired time
+   if (state->_timestamp == timestamp) {
+     last_zupt_state_timestamp = 0.0;
++    stationary_candidate_timestamp = 0.0;
+     return false;
+   }
+ 
+@@ -103,14 +116,14 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+   if (imu_recent.size() < 2) {
+     PRINT_WARNING(RED "[ZUPT]: There are no IMU data to check for zero velocity with!!\n" RESET);
+     last_zupt_state_timestamp = 0.0;
++    stationary_candidate_timestamp = 0.0;
+     return false;
+   }
+ 
+   // If we should integrate the acceleration and say the velocity should be zero
+   // Also if we should still inflate the bias based on their random walk noises
+-  bool integrated_accel_constraint = false; // untested
++  bool integrated_accel_constraint = false;
+   bool model_time_varying_bias = true;
+-  bool override_with_disparity_check = true;
+   bool explicitly_enforce_zero_motion = false;
+ 
+   // Order of our Jacobian
+@@ -215,30 +228,57 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+     PRINT_WARNING(YELLOW "[ZUPT]: chi2_check over the residual limit - %d\n" RESET, (int)res.rows());
+   }
+ 
+-  // Check if the image disparity
+-  bool disparity_passed = false;
+-  if (override_with_disparity_check) {
++  // Low visual disparity is never allowed to override the IMU innovation or
++  // velocity gates. When the project velocity constraint is enabled, visual
++  // evidence is an additional mandatory gate: missing tracks are unknown, not
++  // proof that the rig is stationary.
++  bool visually_confirmed_stationary = false;
++  if (_constrain_velocity) {
++    int frame_features = 0;
++    double frame_disparity = 0.0;
++    double frame_variance = 0.0;
++    FeatureHelper::compute_disparity(_db, state->_timestamp, timestamp, frame_disparity, frame_variance, frame_features);
++    const bool frame_is_stationary = frame_disparity < _zupt_max_disparity && frame_features > 20;
++    if (!frame_is_stationary) {
++      stationary_candidate_timestamp = 0.0;
++      last_zupt_state_timestamp = 0.0;
++      last_zupt_count = 0;
++      PRINT_DEBUG(YELLOW "[ZUPT]: rejected visual frame (%.3f px, %d features)\n" RESET, frame_disparity,
++                  frame_features);
++      return false;
++    }
+ 
+-    // Get the disparity statistics from this image to the previous
+-    double time0_cam = state->_timestamp;
+-    double time1_cam = timestamp;
+-    int num_features = 0;
+-    double disp_avg = 0.0;
+-    double disp_var = 0.0;
+-    FeatureHelper::compute_disparity(_db, time0_cam, time1_cam, disp_avg, disp_var, num_features);
+-
+-    // Check if this disparity is enough to be classified as moving
+-    disparity_passed = (disp_avg < _zupt_max_disparity && num_features > 20);
+-    if (disparity_passed) {
+-      PRINT_INFO(CYAN "[ZUPT]: passed disparity (%.3f < %.3f, %d features)\n" RESET, disp_avg, _zupt_max_disparity, (int)num_features);
+-    } else {
+-      PRINT_DEBUG(YELLOW "[ZUPT]: failed disparity (%.3f > %.3f, %d features)\n" RESET, disp_avg, _zupt_max_disparity, (int)num_features);
++    if (stationary_candidate_timestamp <= 0.0 || stationary_candidate_timestamp >= timestamp) {
++      stationary_candidate_timestamp = state->_timestamp;
++    }
++    if (timestamp - stationary_candidate_timestamp < _min_stationary_time) {
++      last_zupt_state_timestamp = 0.0;
++      last_zupt_count = 0;
++      return false;
++    }
++
++    int accumulated_features = 0;
++    double accumulated_disparity = 0.0;
++    double accumulated_variance = 0.0;
++    FeatureHelper::compute_disparity(_db, stationary_candidate_timestamp, timestamp, accumulated_disparity,
++                                     accumulated_variance, accumulated_features);
++    visually_confirmed_stationary =
++        accumulated_disparity < _zupt_max_disparity && accumulated_features > 20;
++    if (!visually_confirmed_stationary) {
++      stationary_candidate_timestamp = 0.0;
++      last_zupt_state_timestamp = 0.0;
++      last_zupt_count = 0;
++      PRINT_DEBUG(YELLOW "[ZUPT]: rejected accumulated visual motion (%.3f px, %d features)\n" RESET,
++                  accumulated_disparity, accumulated_features);
++      return false;
+     }
+   }
+ 
+   // Check if we are currently zero velocity
+-  // We need to pass the chi2 and not be above our velocity threshold
+-  if (!disparity_passed && (chi2 > _options.chi2_multipler * chi2_check || state->_imu->vel().norm() > _zupt_max_velocity)) {
++  // Both the chi2 and velocity gates are mandatory. Visual evidence, when
++  // enabled above, can reject a candidate but can never bypass these gates.
++  if (chi2 > _options.chi2_multipler * chi2_check || state->_imu->vel().norm() > _zupt_max_velocity) {
++    stationary_candidate_timestamp = 0.0;
+     last_zupt_state_timestamp = 0.0;
+     last_zupt_count = 0;
+     PRINT_DEBUG(YELLOW "[ZUPT]: rejected |v_IinG| = %.3f (chi2 %.3f > %.3f)\n" RESET, state->_imu->vel().norm(), chi2,
+@@ -274,6 +314,19 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+ 
+     // Finally move the state time forward
+     StateHelper::EKFUpdate(state, Hx_order, H, res, R);
++
++    // The upstream inertial ZUPT updates attitude and IMU biases but does not
++    // observe velocity. Once a sustained low-disparity interval confirms that
++    // the rig is stationary, add the missing zero-velocity observation.
++    if (_constrain_velocity && visually_confirmed_stationary) {
++      std::vector<std::shared_ptr<Type>> velocity_order;
++      velocity_order.push_back(state->_imu->v());
++      Eigen::MatrixXd H_velocity = Eigen::MatrixXd::Identity(3, 3);
++      Eigen::VectorXd res_velocity = -state->_imu->vel();
++      Eigen::MatrixXd R_velocity =
++          std::pow(_velocity_noise, 2) * Eigen::MatrixXd::Identity(3, 3);
++      StateHelper::EKFUpdate(state, velocity_order, H_velocity, res_velocity, R_velocity);
++    }
+     state->_timestamp = timestamp;
+ 
+   } else {
+@@ -324,6 +377,11 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+   }
+ 
+   // Finally return
++  if (_constrain_velocity) {
++    // Require a fresh sustained interval before the next velocity constraint.
++    // Normal visual updates therefore resume between conservative ZUPTs.
++    stationary_candidate_timestamp = timestamp;
++  }
+   last_zupt_state_timestamp = timestamp;
+   last_zupt_count++;
+   return true;
+diff --git a/ov_msckf/src/update/UpdaterZeroVelocity.h b/ov_msckf/src/update/UpdaterZeroVelocity.h
+index 4b7f5f6..7e4e472 100644
+--- a/ov_msckf/src/update/UpdaterZeroVelocity.h
++++ b/ov_msckf/src/update/UpdaterZeroVelocity.h
+@@ -64,10 +64,13 @@ public:
+    * @param zupt_max_velocity Max velocity we should consider to do a update with
+    * @param zupt_noise_multiplier Multiplier of our IMU noise matrix (default should be 1.0)
+    * @param zupt_max_disparity Max disparity we should consider to do a update with
++   * @param constrain_velocity If confirmed stationary intervals should constrain velocity
++   * @param velocity_noise Standard deviation of the zero-velocity pseudo measurement
++   * @param min_stationary_time Minimum low-disparity interval before constraining velocity
+    */
+   UpdaterZeroVelocity(UpdaterOptions &options, NoiseManager &noises, std::shared_ptr<ov_core::FeatureDatabase> db,
+                       std::shared_ptr<Propagator> prop, double gravity_mag, double zupt_max_velocity, double zupt_noise_multiplier,
+-                      double zupt_max_disparity);
++                      double zupt_max_disparity, bool constrain_velocity, double velocity_noise, double min_stationary_time);
+ 
+   /**
+    * @brief Feed function for inertial data
+@@ -139,6 +142,18 @@ protected:
+   /// Max disparity (pixels) that we should consider a zupt with
+   double _zupt_max_disparity = 1.0;
+ 
++  /// If sustained visual stationarity is required before constraining velocity
++  bool _constrain_velocity = false;
++
++  /// Standard deviation of the zero-velocity pseudo measurement (m/s)
++  double _velocity_noise = 0.05;
++
++  /// Minimum low-disparity interval before constraining velocity (s)
++  double _min_stationary_time = 0.25;
++
++  /// Start of the current visually stationary candidate interval
++  double stationary_candidate_timestamp = 0.0;
++
+   /// Chi squared 95th percentile table (lookup would be size of residual)
+   std::map<int, double> chi_squared_table;
+ 

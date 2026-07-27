@@ -1,0 +1,100 @@
+%YAML:1.0
+# SAFE TEMPLATE: ovrs_live refuses this file until the serial and factory
+# calibration placeholders are replaced from a report produced for the
+# connected unit. BOOTSTRAP_UNVERIFIED is for careful handheld validation only.
+calibration_state: "BOOTSTRAP_UNVERIFIED"
+calibrated_serial: "REPLACE_WITH_DEVICE_SERIAL"
+
+verbosity: "WARNING"
+max_estimated_speed_m_s: 3.0
+max_accel_bias_m_s2: 2.0
+use_fej: true
+integration: "rk4"
+use_stereo: true
+max_cameras: 2
+
+calib_cam_extrinsics: false
+calib_cam_intrinsics: false
+calib_cam_timeoffset: false
+calib_imu_intrinsics: false
+calib_imu_g_sensitivity: false
+
+max_clones: 11
+max_slam: 25
+max_slam_in_update: 25
+max_msckf_in_update: 40
+dt_slam_delay: 2.0
+gravity_mag: 9.80665
+feat_rep_msckf: "GLOBAL_3D"
+feat_rep_slam: "ANCHORED_MSCKF_INVERSE_DEPTH"
+feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
+
+try_zupt: true
+zupt_chi2_multipler: 1
+zupt_max_velocity: 0.25
+zupt_noise_multiplier: 10
+zupt_max_disparity: 0.5
+zupt_only_at_beginning: true
+zupt_constrain_velocity: true
+zupt_velocity_noise: 0.05
+zupt_min_stationary_time: 0.25
+
+# A two-second stationary window initialized the recorded D435i sequences
+# before handheld motion without retaining an unnecessarily old IMU window.
+init_window_time: 2.0
+init_imu_thresh: 1.5
+init_max_disparity: 5.0
+init_max_features: 50
+init_dyn_use: false
+init_dyn_mle_opt_calib: false
+init_dyn_mle_max_iter: 50
+init_dyn_mle_max_time: 0.05
+init_dyn_mle_max_threads: 4
+init_dyn_num_pose: 6
+init_dyn_min_deg: 10.0
+init_dyn_inflation_ori: 10
+init_dyn_inflation_vel: 100
+init_dyn_inflation_bg: 10
+init_dyn_inflation_ba: 100
+init_dyn_min_rec_cond: 1e-12
+init_dyn_bias_g: [0.0, 0.0, 0.0]
+init_dyn_bias_a: [0.0, 0.0, 0.0]
+
+record_timing_information: false
+record_timing_filepath: "openvins_timing.txt"
+save_total_state: false
+filepath_est: "unused_estimate.txt"
+filepath_std: "unused_std.txt"
+filepath_gt: "unused_groundtruth.txt"
+
+use_klt: true
+num_pts: 200
+fast_threshold: 20
+grid_x: 5
+grid_y: 4
+min_px_dist: 15
+knn_ratio: 0.70
+track_frequency: 30.0
+downsample_cameras: false
+num_opencv_threads: 4
+histogram_method: "HISTOGRAM"
+use_aruco: false
+num_aruco: 0
+downsize_aruco: true
+
+up_msckf_sigma_px: 1
+up_msckf_chi2_multipler: 1
+up_slam_sigma_px: 1
+up_slam_chi2_multipler: 1
+up_aruco_sigma_px: 1
+up_aruco_chi2_multipler: 1
+use_mask: false
+
+# The D435i stereo baseline is short relative to typical indoor feature
+# distance. OpenVINS' generic 10000/40 gates reject otherwise consistent
+# room-scale stereo tracks, so retain conservative D435i-specific limits.
+fi_max_cond_number: 60000
+fi_max_baseline: 100
+
+relative_config_imu: "d435i_factory_imu.yaml"
+relative_config_imucam: "d435i_factory_imucam.yaml"

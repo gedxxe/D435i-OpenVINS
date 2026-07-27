@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">D435i OpenVINS standalone visual-inertial odometry</title>
+  <desc id="desc">A stereo camera and IMU feed a bounded standalone OpenVINS pipeline that produces a three-dimensional trajectory.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.55" stop-color="#102d46"/>
+      <stop offset="1" stop-color="#0b1828"/>
+    </linearGradient>
+    <linearGradient id="camera" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#31475d"/>
+      <stop offset="1" stop-color="#152435"/>
+    </linearGradient>
+    <linearGradient id="path" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#35d0ba"/>
+      <stop offset="1" stop-color="#66a8ff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="420" rx="28" fill="url(#background)"/>
+  <g opacity="0.13" stroke="#8dc8ff" stroke-width="1">
+    <path d="M0 70H1280M0 140H1280M0 210H1280M0 280H1280M0 350H1280"/>
+    <path d="M80 0V420M160 0V420M240 0V420M320 0V420M400 0V420M480 0V420M560 0V420M640 0V420M720 0V420M800 0V420M880 0V420M960 0V420M1040 0V420M1120 0V420M1200 0V420"/>
+  </g>
+
+  <g transform="translate(84 107)">
+    <rect x="0" y="38" width="326" height="152" rx="25" fill="url(#camera)" stroke="#7695ad" stroke-width="2"/>
+    <rect x="36" y="0" width="138" height="56" rx="13" fill="#263b50" stroke="#7695ad" stroke-width="2"/>
+    <circle cx="72" cy="114" r="41" fill="#07111d" stroke="#35d0ba" stroke-width="5"/>
+    <circle cx="72" cy="114" r="21" fill="#183b52"/>
+    <circle cx="254" cy="114" r="41" fill="#07111d" stroke="#66a8ff" stroke-width="5"/>
+    <circle cx="254" cy="114" r="21" fill="#183b52"/>
+    <rect x="143" y="85" width="40" height="58" rx="8" fill="#0b1622" stroke="#e9b949" stroke-width="3"/>
+    <text x="163" y="119" text-anchor="middle" fill="#e9b949" font-family="Arial, sans-serif" font-size="16" font-weight="700">IMU</text>
+    <text x="72" y="205" text-anchor="middle" fill="#a8d8cf" font-family="Arial, sans-serif" font-size="16">IR1</text>
+    <text x="254" y="205" text-anchor="middle" fill="#afd0ff" font-family="Arial, sans-serif" font-size="16">IR2</text>
+  </g>
+
+  <g transform="translate(478 78)">
+    <rect width="316" height="264" rx="24" fill="#0b1c2c" stroke="#456d89" stroke-width="2"/>
+    <text x="158" y="42" text-anchor="middle" fill="#f2f7fb" font-family="Arial, sans-serif" font-size="25" font-weight="700">Standalone VIO</text>
+    <g font-family="Arial, sans-serif" font-size="17" fill="#d9e9f5">
+      <rect x="38" y="67" width="240" height="38" rx="9" fill="#17374b"/>
+      <text x="158" y="92" text-anchor="middle">bounded queues</text>
+      <rect x="38" y="116" width="240" height="38" rx="9" fill="#17374b"/>
+      <text x="158" y="141" text-anchor="middle">timestamp + stereo sync</text>
+      <rect x="38" y="165" width="240" height="38" rx="9" fill="#17374b"/>
+      <text x="158" y="190" text-anchor="middle">ordered dispatch</text>
+      <rect x="38" y="214" width="240" height="38" rx="9" fill="#17374b"/>
+      <text x="158" y="239" text-anchor="middle">OpenVINS MSCKF</text>
+    </g>
+  </g>
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M410 211H466" stroke="#35d0ba" stroke-width="5"/>
+    <path d="M454 199L468 211L454 223" fill="none" stroke="#35d0ba" stroke-width="5"/>
+    <path d="M796 211H846" stroke="#66a8ff" stroke-width="5"/>
+    <path d="M834 199L848 211L834 223" fill="none" stroke="#66a8ff" stroke-width="5"/>
+  </g>
+
+  <g transform="translate(870 62)">
+    <path d="M18 275H320M36 295V12" stroke="#829bb0" stroke-width="2"/>
+    <path d="M36 275L298 86" fill="none" stroke="url(#path)" stroke-width="9" filter="url(#glow)"/>
+    <path d="M36 275C86 239 110 258 144 207S211 164 239 124S278 114 298 86" fill="none" stroke="#eaf6ff" stroke-width="2"/>
+    <circle cx="36" cy="275" r="8" fill="#35d0ba"/>
+    <circle cx="298" cy="86" r="9" fill="#66a8ff"/>
+    <path d="M36 275L80 275" stroke="#ff6b6b" stroke-width="4"/>
+    <path d="M36 275L36 229" stroke="#62d68b" stroke-width="4"/>
+    <path d="M36 275L68 247" stroke="#66a8ff" stroke-width="4"/>
+    <g font-family="Arial, sans-serif" font-size="15" font-weight="700">
+      <text x="85" y="280" fill="#ff8d8d">X</text>
+      <text x="31" y="218" fill="#79e59d">Y</text>
+      <text x="74" y="243" fill="#8fc0ff">Z</text>
+    </g>
+    <text x="178" y="332" text-anchor="middle" fill="#eaf6ff" font-family="Arial, sans-serif" font-size="20" font-weight="700">global XYZ trajectory</text>
+  </g>
+
+  <text x="56" y="51" fill="#f4f8fb" font-family="Arial, sans-serif" font-size="27" font-weight="700">D435i · OpenVINS v2.7 · C++17 · ROS-free</text>
+  <text x="56" y="386" fill="#9db5c8" font-family="Arial, sans-serif" font-size="17">Stereo IR + inertial propagation + MSCKF feature constraints</text>
+</svg>

@@ -1,0 +1,12 @@
+set(OVRS_OPENVINS_TAG "v2.7")
+set(OVRS_OPENVINS_COMMIT "93adc241390d13e99232652cf05cbe18a93c7bea")
+set(OVRS_CERES_VERSION "2.1.0")
+set(OVRS_CERES_TAG "2.1.0")
+set(OVRS_CERES_COMMIT "f68321e7de8929fbcdb95dd42877531e64f72f66")
+set(OVRS_LIBREALSENSE_VERSION "2.56.5")
+set(OVRS_LIBREALSENSE_TAG "v2.56.5")
+set(OVRS_LIBREALSENSE_COMMIT "38a41441971387197193ad3aeae3cefe6a11f2cb")
+# External calibration tools are not runtime dependencies. These commits make
+# the documented isolated ROS1/Docker workflow reproducible.
+set(OVRS_KALIBR_COMMIT "1f60227442d25e36365ef5f72cd80b9666d73467")
+set(OVRS_ALLAN_VARIANCE_ROS_COMMIT "1d54b602ee7f2ba0427865d63afe4945d913ed24")

@@ -1,0 +1,4 @@
+%YAML:1.0
+# Display mode is selected explicitly with ovrs_live --headless or --viewer.
+pose_print_rate_hz: 1.0
+diagnostics_rate_hz: 1.0

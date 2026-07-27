@@ -1,0 +1,47 @@
+%YAML:1.0
+# Conservative placeholders copied from the inflated RealSense D455 example
+# in OpenVINS v2.7 config/rs_d455/kalibr_imu_chain.yaml. These values have not
+# been characterized for a D435i and remain BOOTSTRAP_UNVERIFIED. Noise values
+# are unchanged; update_rate is changed from that example's 400 Hz to this
+# application's requested 200 Hz gyro output, and the unused ROS topic is
+# removed. Identity intrinsics remain placeholders pending unit calibration.
+calibration_state: "BOOTSTRAP_UNVERIFIED"
+calibrated_serial: "REPLACE_WITH_DEVICE_SERIAL"
+
+imu0:
+  # Must match resolved_stream_config.yaml and device_report.yaml. Samples
+  # captured with this policy have librealsense factory motion correction
+  # enabled before project-owned accel-to-gyro frame rotation.
+  realsense_motion_correction_enabled: true
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  accelerometer_noise_density: 0.00207649074
+  accelerometer_random_walk: 0.00041327852
+  gyroscope_noise_density: 0.00020544166
+  gyroscope_random_walk: 0.00001110622
+  time_offset: 0.0
+  update_rate: 200
+  model: "kalibr"
+  Tw:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  R_IMUtoGYRO:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  Ta:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  R_IMUtoACC:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  Tg:
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
