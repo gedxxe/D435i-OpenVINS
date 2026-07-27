@@ -1,5 +1,5 @@
 diff --git a/ov_msckf/src/core/VioManager.cpp b/ov_msckf/src/core/VioManager.cpp
-index 6a0d7b9..8e904c5 100644
+index 6a0d7b9..e490196 100644
 --- a/ov_msckf/src/core/VioManager.cpp
 +++ b/ov_msckf/src/core/VioManager.cpp
 @@ -159,7 +159,9 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
@@ -25,7 +25,7 @@ index 6a0d7b9..8e904c5 100644
      PRINT_WARNING(RED "[SIM]: casting our tracker to a TrackSIM object!\n" RESET);
    }
 diff --git a/ov_msckf/src/core/VioManagerOptions.h b/ov_msckf/src/core/VioManagerOptions.h
-index 0df7d15..5a2a626 100644
+index 0df7d15..979e325 100644
 --- a/ov_msckf/src/core/VioManagerOptions.h
 +++ b/ov_msckf/src/core/VioManagerOptions.h
 @@ -94,6 +94,15 @@ struct VioManagerOptions {
@@ -65,7 +65,7 @@ index 0df7d15..5a2a626 100644
      PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
    }
 diff --git a/ov_msckf/src/update/UpdaterZeroVelocity.cpp b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
-index 3c55846..b29f545 100644
+index 3c55846..e05b7fc 100644
 --- a/ov_msckf/src/update/UpdaterZeroVelocity.cpp
 +++ b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
 @@ -35,15 +35,26 @@
@@ -239,7 +239,7 @@ index 3c55846..b29f545 100644
    last_zupt_count++;
    return true;
 diff --git a/ov_msckf/src/update/UpdaterZeroVelocity.h b/ov_msckf/src/update/UpdaterZeroVelocity.h
-index 4b7f5f6..7e4e472 100644
+index 4b7f5f6..5a2f614 100644
 --- a/ov_msckf/src/update/UpdaterZeroVelocity.h
 +++ b/ov_msckf/src/update/UpdaterZeroVelocity.h
 @@ -64,10 +64,13 @@ public:

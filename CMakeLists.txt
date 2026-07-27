@@ -225,6 +225,14 @@ if(OVRS_BUILD_TESTS)
       COMMAND "${Python3_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_scripts_test.py")
   endif()
+
+  find_program(OVRS_BASH_EXECUTABLE bash)
+  if(UNIX AND OVRS_BASH_EXECUTABLE)
+    add_test(
+      NAME ovrs_repository_checks_test
+      COMMAND "${OVRS_BASH_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/tests/repository_checks_test.sh")
+  endif()
 endif()
 
 install(TARGETS ovrs_inspect ovrs_record ovrs_live ovrs_replay
