@@ -122,11 +122,14 @@ std::size_t bounded_size_option(
   return static_cast<std::size_t>(parsed);
 }
 
-std::string version_summary(const std::string &application) {
+std::string version_summary(const std::string &application,
+                            const std::string &ceres,
+                            const std::string &opencv,
+                            const std::string &realsense) {
   return application + " " + project_version + "\nOpenVINS " +
          openvins_tag + " (" + openvins_commit + ")\nCeres " +
-         ceres_version + "\nOpenCV " + opencv_version +
-         "\nlibrealsense " + realsense_version + "\nSource fingerprint " +
+         ceres + "\nOpenCV " + opencv +
+         "\nlibrealsense " + realsense + "\nSource fingerprint " +
          source_fingerprint + "\n";
 }
 

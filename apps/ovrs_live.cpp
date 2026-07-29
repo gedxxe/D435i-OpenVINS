@@ -56,7 +56,9 @@ void help() {
 
 int main(int argc, char **argv) {
   if (ovrs::has_flag(argc, argv, "--version")) {
-    std::cout << ovrs::version_summary("ovrs_live");
+    std::cout << ovrs::version_summary(
+        "ovrs_live", ovrs::ceres_version, ovrs::opencv_version,
+        ovrs::realsense_version);
     return 0;
   }
   if (ovrs::has_flag(argc, argv, "--help") || ovrs::has_flag(argc, argv, "-h")) {

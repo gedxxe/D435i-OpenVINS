@@ -30,7 +30,10 @@ std::size_t bounded_size_option(
     int argc, char **argv, const std::string &option,
     std::size_t default_value, std::size_t minimum,
     std::size_t maximum);
-std::string version_summary(const std::string &application);
+std::string version_summary(const std::string &application,
+                            const std::string &ceres,
+                            const std::string &opencv,
+                            const std::string &realsense);
 bool validate_cli_arguments(
     int argc, char **argv,
     const std::vector<std::string> &value_options,

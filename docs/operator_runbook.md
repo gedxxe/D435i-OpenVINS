@@ -19,8 +19,9 @@ conditions.
 > This is odometry, not mapping or loop closure. Drift is bounded by sensor
 > quality, calibration, excitation, feature geometry, and estimator
 > consistency. The selected camera records an explicit gyro-scale policy.
-> Post-calibration A/B selects the SDK value directly at scale `1.0`; this
-> prevents a proven under-rotation but cannot eliminate standalone-VIO drift.
+> The patched RSUSB host path now preserves the requested gyro sensitivity and
+> uses the SDK value directly at scale `1.0`; this removes the demonstrated
+> angular-scale mismatch but cannot eliminate standalone-VIO drift.
 
 ## At a glance
 
@@ -46,11 +47,12 @@ audit.
 
 > [!WARNING]
 > The selected bundle for D435i serial `843212070146` is not accepted as a
-> drift-safe runtime. The former gyro factor `0.5` produced runaway during
-> pitch; post-calibration factor `1.0` removed that runaway but a controlled
-> live run still retained material endpoint drift. Use the command below only
-> to record diagnostic evidence, keep the 3 m/s safety gate enabled, and do
-> not use its pose as a trusted measurement.
+> drift-safe runtime. A pinned librealsense RSUSB encoding bug made some
+> level-1 sessions report about twice the visual rotation. The supported build
+> now patches that host-side bug and keeps project gyro scale `1.0`, but a
+> controlled live run still retained material endpoint drift. Use the command
+> below only to record diagnostic evidence, keep the 3 m/s safety gate enabled,
+> and do not use its pose as a trusted measurement.
 
 The current diagnostic baseline is:
 
@@ -63,6 +65,11 @@ It uses the repeatable candidate-A camera/IMU calibration, fixed
 visually gated stop recovery. Identical-data replay and connected live testing
 remove the earlier runaway, but operator-bounded live motion still shows
 residual position drift.
+
+The verifier rejects any selected stream that no longer contains sensitivity
+level 1 and gyro scale 1.0. Patch hashes are pinned beside dependency commits,
+and the full build rejects a changed patch or system librealsense before
+starting the estimator.
 
 Start the realtime stereo and interactive global XYZ diagnostic viewer from a
 graphical Ubuntu session:
@@ -124,12 +131,13 @@ ground truth.
 Stop and preserve the run if estimated displacement disagrees materially with
 physical motion. The selected VIO stream uses 848x480 Y8 stereo at 90 Hz and
 explicitly sets then reads back D435i gyro-sensitivity level `1`. It also
-records and applies `gyro_scale_factor: 1.0`. After the latest official EEPROM
-calibration, identical-data replay with the former `0.5` factor reached the
-3 m/s gate, while `1.0` completed with 0.0588 m final displacement and
-0.0065 m/s final speed. A connected 131-second `1.0` live run avoided runaway
-but retained approximately 0.62 m endpoint error beyond reported physical
-translation. Keep the separate 30 Hz
+records and applies `gyro_scale_factor: 1.0`. The build applies the reviewed
+RSUSB gyro-sensitivity patch and verifies that the hardware executables load
+the repository-local library. A patched connected capture measured
+visual/gyro rotations of 5.010/5.052, 13.497/13.287, and 12.078/12.076
+degrees. This fixes the acquisition-scale runaway, but an earlier connected
+131-second run retained approximately 0.62 m endpoint error beyond reported
+physical translation. Keep the separate 30 Hz
 `config/sensors/realsense_streams.yaml` profile for documented calibration
 captures; it carries the same sensitivity and scale contract. Historical
 `0.5` evidence remains documented rather than silently reinterpreted.
@@ -157,7 +165,7 @@ The project-owned gate reports visual support as `WARMING_UP`, `HEALTHY`, or
 configured support threshold has been sustained. It catches prolonged loss of
 accepted visual constraints; it does not certify pose accuracy.
 
-1. Verify the five SHA-256 values and pass both preflight commands in the
+1. Verify the six SHA-256 values and pass both preflight commands in the
    ready-to-run block above. Do not substitute another serial, calibration,
    stream file, gyro-sensitivity/scale policy, online time-offset policy, or
    stop-recovery setting.
@@ -394,7 +402,7 @@ Primary references:
 apps/                 inspector, recorder, live runner, dataset replay
 include/ovrs/, src/   synchronization, dispatch, capture, adapter, viewer
 config/               stream templates and estimator configuration
-patches/              reviewed project patch applied to pinned OpenVINS
+patches/              reviewed changes for pinned third-party dependencies
 third_party/open_vins pinned v2.7 Git submodule; ROS disabled
 scripts/              dependency, build, validation, run, and plotting tools
 tests/                dependency-light unit and synthetic replay tests
@@ -499,8 +507,9 @@ ctest --test-dir build/linux-release \
 ```
 
 Success requires project version 0.5.2, OpenVINS v2.7 with ROS disabled,
-repository-local Ceres 2.1.0, repository-local librealsense 2.57.3, and actual
-CTest cases. `No tests were found` is a failure.
+repository-local Ceres 2.1.0, patched repository-local librealsense 2.57.3,
+hardware executables resolving that local library, and actual CTest cases.
+`No tests were found` is a failure.
 
 ## 2. Start one terminal session
 

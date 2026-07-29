@@ -45,6 +45,9 @@ set(OVRS_OPENVINS_PREFIX "" CACHE PATH
 set(OVRS_CERES_PREFIX
     "${CMAKE_CURRENT_SOURCE_DIR}/.deps/install/ceres" CACHE PATH
     "Repository-local Ceres ${OVRS_CERES_VERSION} install prefix")
+set(OVRS_REALSENSE_PREFIX
+    "${CMAKE_CURRENT_SOURCE_DIR}/.deps/install/librealsense" CACHE PATH
+    "Repository-local patched librealsense ${OVRS_LIBREALSENSE_VERSION} prefix")
 
 find_package(Threads REQUIRED)
 
@@ -101,7 +104,10 @@ ovrs_enable_project_warnings(ovrs_core)
 ovrs_enable_project_sanitizers(ovrs_core)
 
 if(OVRS_ENABLE_HARDWARE)
-  find_package(realsense2 ${OVRS_LIBREALSENSE_VERSION} EXACT CONFIG REQUIRED)
+  find_package(realsense2 ${OVRS_LIBREALSENSE_VERSION} EXACT CONFIG REQUIRED
+    PATHS "${OVRS_REALSENSE_PREFIX}/lib/cmake/realsense2"
+          "${OVRS_REALSENSE_PREFIX}/lib64/cmake/realsense2"
+    NO_DEFAULT_PATH)
   if(TARGET realsense2::realsense2)
     set(_ovrs_realsense_target realsense2::realsense2)
   elseif(TARGET realsense2)
@@ -131,6 +137,8 @@ if(OVRS_ENABLE_HARDWARE)
     PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(ovrs_capture_preview
     PUBLIC ovrs_core PRIVATE ${OpenCV_LIBS})
+  target_compile_definitions(ovrs_capture_preview PUBLIC
+    OVRS_OPENCV_VERSION="${OpenCV_VERSION}")
   ovrs_enable_project_warnings(ovrs_capture_preview)
   ovrs_enable_project_sanitizers(ovrs_capture_preview)
 endif()
@@ -221,6 +229,19 @@ if(OVRS_BUILD_TESTS)
   ovrs_enable_project_sanitizers(ovrs_mock_replay_test)
   add_test(NAME ovrs_mock_replay_test COMMAND ovrs_mock_replay_test)
 
+  if(NOT Python3_EXECUTABLE)
+    if(WIN32)
+      set(OVRS_LOCAL_PYTHON
+          "${CMAKE_CURRENT_SOURCE_DIR}/.venv/Scripts/python.exe")
+    else()
+      set(OVRS_LOCAL_PYTHON
+          "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python")
+    endif()
+    if(EXISTS "${OVRS_LOCAL_PYTHON}")
+      set(Python3_EXECUTABLE "${OVRS_LOCAL_PYTHON}"
+          CACHE FILEPATH "Python interpreter used by repository tests")
+    endif()
+  endif()
   find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
     add_test(

@@ -1,6 +1,7 @@
 #include "ovrs/app_support.hpp"
 #include "ovrs/config.hpp"
 #include "ovrs/realsense_source.hpp"
+#include "ovrs/version.hpp"
 #include "ovrs/yaml_utils.hpp"
 
 #include <algorithm>
@@ -155,7 +156,9 @@ void write_camera(std::ostream &out, const std::string &name,
 
 int main(int argc, char **argv) {
   if (ovrs::has_flag(argc, argv, "--version")) {
-    std::cout << ovrs::version_summary("ovrs_inspect");
+    std::cout << ovrs::version_summary(
+        "ovrs_inspect", ovrs::ceres_version, ovrs::opencv_version,
+        ovrs::realsense_version);
     return 0;
   }
   if (ovrs::has_flag(argc, argv, "--help") ||

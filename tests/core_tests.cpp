@@ -196,6 +196,8 @@ TEST_CASE("capture modes have explicit non-ambiguous stream plans") {
 }
 
 TEST_CASE("stream configuration YAML is validated and applied") {
+  // A non-selected factor exercises generic parsing and legacy-dataset
+  // provenance. The selected-runtime verifier separately requires 1.0.
   ovrs::StreamConfig config;
   std::string error;
   REQUIRE(ovrs::apply_stream_config_yaml("width: 640\nheight: 480\ncamera_fps: 15\n"
@@ -225,6 +227,8 @@ TEST_CASE("stream configuration YAML is validated and applied") {
 }
 
 TEST_CASE("stream configuration CLI and serialization are strict") {
+  // Keep this round-trip independent of the selected serial's fixed 1.0
+  // policy so arbitrary historical provenance remains lossless.
   const auto stream_options = ovrs::stream_cli_value_options();
   const std::vector<std::string> expected_options{"--serial",
                                                   "--width",
@@ -435,6 +439,7 @@ TEST_CASE("calibration identity and dependency paths fail closed") {
       "motion_correction_enabled: true\nglobal_time_enabled: true\n", &error));
   REQUIRE(ovrs::validate_runtime_sensor_policy(
       root / "main.yaml", main_yaml,
+      // This non-selected value verifies cross-file agreement, not promotion.
       "motion_correction_active: true\nglobal_time_active: true\n"
       "gyro_sensitivity_requested: 1\ngyro_sensitivity_available: true\n"
       "gyro_sensitivity_active: 1\n"

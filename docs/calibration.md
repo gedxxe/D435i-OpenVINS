@@ -36,8 +36,10 @@ Runtime policy is fixed and must remain consistent across live and replay:
 - dynamic gyro-sensitivity level 1 explicitly set before streaming and read
   back after streaming starts;
 - serial-bound `gyro_scale_factor: 1.0`, applied before synchronization and
-  recorded in capture provenance; post-EEPROM-calibration identical-data A/B
-  rejected the former `0.5` selection;
+  recorded in capture provenance;
+- pinned repository-local librealsense with the reviewed RSUSB
+  gyro-sensitivity encoding patch; a connected visual/gyro check confirmed
+  the patched level-1 stream is one-to-one at project scale `1.0`;
 - RealSense motion correction and Global Time active.
 
 The separate 30 Hz profile remains the calibration acquisition contract. It

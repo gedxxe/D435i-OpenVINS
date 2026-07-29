@@ -5,6 +5,7 @@
 #include "ovrs/imu_synchronizer.hpp"
 #include "ovrs/realsense_source.hpp"
 #include "ovrs/stereo_capture_preview.hpp"
+#include "ovrs/version.hpp"
 #include "ovrs/yaml_utils.hpp"
 
 #include <chrono>
@@ -46,13 +47,17 @@ void help() {
                "                   [--version]\n"
                "MODE is vio (default), imu-allan, stereo-calibration, or\n"
                "imu-camera-calibration. Calibration captures are deliberately\n"
-               "not replay-compatible and never become KALIBR_VERIFIED.\n";
+               "not replay-compatible and never become KALIBR_VERIFIED.\n"
+               "--preview is valid only for stereo-calibration and\n"
+               "imu-camera-calibration captures.\n";
 }
 } // namespace
 
 int main(int argc, char **argv) {
   if (ovrs::has_flag(argc, argv, "--version")) {
-    std::cout << ovrs::version_summary("ovrs_record");
+    std::cout << ovrs::version_summary(
+        "ovrs_record", ovrs::ceres_version, ovrs::opencv_version,
+        ovrs::realsense_version);
     return 0;
   }
   if (ovrs::has_flag(argc, argv, "--help") ||

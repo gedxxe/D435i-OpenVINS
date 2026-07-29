@@ -57,7 +57,9 @@ std::vector<std::string> split(const std::string &line) {
 
 int main(int argc, char **argv) {
   if (ovrs::has_flag(argc, argv, "--version")) {
-    std::cout << ovrs::version_summary("ovrs_replay");
+    std::cout << ovrs::version_summary(
+        "ovrs_replay", ovrs::ceres_version, ovrs::opencv_version,
+        ovrs::realsense_version);
     return 0;
   }
   if (ovrs::has_flag(argc, argv, "--help") || ovrs::has_flag(argc, argv, "-h")) {

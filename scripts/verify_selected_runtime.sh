@@ -56,11 +56,34 @@ selected_dir="${repo_dir}/config/local/d435i-${selected_serial}/selected_runtime
 estimator_config="${selected_dir}/estimator.yaml"
 stream_config="${repo_dir}/config/sensors/realsense_streams_vio_90hz.yaml"
 openvins_patch="${repo_dir}/patches/openvins-zupt-velocity-constraint.patch"
+realsense_patch="${repo_dir}/patches/librealsense-rsusb-gyro-sensitivity.patch"
+dependency_pin_file="${repo_dir}/cmake/DependencyVersions.cmake"
+selected_runtime_doc="${repo_dir}/docs/selected_runtime.md"
 
 if [[ ! -f "${estimator_config}" ]]; then
   echo "Selected runtime not found for D435i ${selected_serial}." >&2
   exit 1
 fi
+
+pin_value() {
+  sed -n "s/^set($1 \"\\([^\"]*\\)\").*/\\1/p" "${dependency_pin_file}"
+}
+
+realsense_patch_sha256="$(pin_value OVRS_LIBREALSENSE_PATCH_SHA256)"
+openvins_patch_sha256="$(pin_value OVRS_OPENVINS_PATCH_SHA256)"
+if [[ ! "${realsense_patch_sha256}" =~ ^[0-9a-f]{64}$ ||
+      ! "${openvins_patch_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Dependency patch SHA-256 pins are missing or invalid." >&2
+  exit 1
+fi
+for patch_sha256 in \
+  "${realsense_patch_sha256}" \
+  "${openvins_patch_sha256}"; do
+  if ! grep -Fq "${patch_sha256}" "${selected_runtime_doc}"; then
+    echo "Selected-runtime documentation is missing patch SHA-256 ${patch_sha256}." >&2
+    exit 1
+  fi
+done
 
 printf '%s  %s\n' \
   "be37da3454190ba262a204afa709ee58d034784814e3a7c09fb629be02479867" \
@@ -69,9 +92,11 @@ printf '%s  %s\n' \
   "${selected_dir}/post_rs_imu_candidate_a_imu.yaml" \
   "0e911d87f1d2f508de1e9504354272220a999e76d821c9e4dc6b3a6fd3006f4f" \
   "${selected_dir}/post_rs_imu_candidate_a_imucam.yaml" \
-  "cc0cf24730f056dcd6af1d2eebcac21bc3c6e3266e752a17b0d86e61fa8cff03" \
+  "c040d24b331c7c2e0e27ed39f329c52b8b2868795b0c9d76279bf521c4389f53" \
   "${stream_config}" \
-  "000c826231727ee10cf240d89469e956e44028ddaff5cf3ccb2c744b92368d37" \
+  "${realsense_patch_sha256}" \
+  "${realsense_patch}" \
+  "${openvins_patch_sha256}" \
   "${openvins_patch}" |
   sha256sum --check
 
@@ -82,6 +107,25 @@ calibrated_serial="$(
 )"
 if [[ "${calibrated_serial}" != "${selected_serial}" ]]; then
   echo "Selected estimator serial does not match ${selected_serial}." >&2
+  exit 1
+fi
+
+gyro_sensitivity="$(
+  sed -n \
+    's/^[[:space:]]*gyro_sensitivity:[[:space:]]*\([^[:space:]#]*\).*$/\1/p' \
+    "${stream_config}"
+)"
+gyro_scale_factor="$(
+  sed -n \
+    's/^[[:space:]]*gyro_scale_factor:[[:space:]]*\([^[:space:]#]*\).*$/\1/p' \
+    "${stream_config}"
+)"
+if [[ "${gyro_sensitivity}" != "1" ]]; then
+  echo "Selected stream must use gyro_sensitivity: 1." >&2
+  exit 1
+fi
+if [[ "${gyro_scale_factor}" != "1.0" ]]; then
+  echo "Selected stream must use gyro_scale_factor: 1.0." >&2
   exit 1
 fi
 

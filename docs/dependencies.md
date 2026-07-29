@@ -3,7 +3,7 @@
 Review privileged commands before execution. The repository installer prompts
 before calling `sudo apt-get` and never removes packages.
 
-## Official librealsense package route
+## Optional official librealsense utilities
 
 The official Ubuntu 20/22/24 instructions currently use:
 
@@ -27,8 +27,10 @@ review and explicit approval. Confirm the resolved version:
 pkg-config --modversion realsense2
 ```
 
-The reproducible build accepts the package only at exactly `2.57.3`.
-The package also installs persistent udev rules. For a local RSUSB build,
+The supported project build does not link this package, even when it reports
+version `2.57.3`; it always links the reviewed repository-local build below.
+The package can still provide diagnostic utilities and persistent udev rules.
+For the repository-local RSUSB build,
 installing an equivalent rule under `/etc/udev/rules.d` is a separate
 privileged, persistent host change: inspect the pinned
 `.deps/src/librealsense/config/99-realsense-libusb.rules` file first (after
@@ -36,20 +38,25 @@ the pinned source has been cloned) and obtain explicit approval before copying
 it. Without an installed rule, do not run normal VIO as root merely to hide a
 permissions problem.
 
-## Repository-local source fallback
+## Required repository-local source
 
-If the exact package is unavailable or kernel integration is problematic,
-`scripts/build_ubuntu.sh` clones tag `v2.57.3`, verifies commit
+`scripts/build_ubuntu.sh` always clones tag `v2.57.3`, verifies commit
 `5e046e509995cda79b42d89fa95ab65f90678641`, and builds with
-`FORCE_RSUSB_BACKEND=ON` under `.deps`. Optional tools, examples, tests,
-graphical and Python extensions, update checks, the all-in-one static bundle,
-and firmware downloads are disabled. Librealsense v2.57.3 unconditionally
-invokes a bare `ldconfig` from its install rules even for a custom prefix. The
-build creates a private no-op executable under `.deps/build` and prepends that
-one directory to `PATH` only for `cmake --install`; it does not modify the
-persistent environment or `/etc/ld.so.cache`. It does not run upstream helper
-scripts, execute firmware tools, patch kernel modules, install under
-`/usr/local`, or alter firmware.
+`FORCE_RSUSB_BACKEND=ON` under `.deps`. It applies and verifies
+`patches/librealsense-rsusb-gyro-sensitivity.patch`, which preserves dynamic
+gyro-sensitivity values when the RSUSB backend encodes the unsigned feature
+report. The patch SHA-256 is pinned beside the dependency commit in
+`cmake/DependencyVersions.cmake` and is checked before its content can enter a
+build. Optional tools, examples, tests, graphical and Python extensions,
+update checks, the all-in-one static bundle, and firmware downloads are
+disabled. Librealsense v2.57.3 unconditionally invokes a bare `ldconfig` from
+its install rules even for a custom prefix. The build creates a private no-op
+executable under `.deps/build` and prepends that one directory to `PATH` only
+for `cmake --install`; it does not modify the persistent environment or
+`/etc/ld.so.cache`. It does not run upstream helper scripts, execute firmware
+tools, patch kernel modules, install under `/usr/local`, or alter firmware.
+Project CMake uses `NO_DEFAULT_PATH`, and preflight checks the loaded library
+path for every hardware executable.
 
 Reconfiguration does not delete prior build outputs. If an earlier run used
 librealsense's default `BUILD_TOOLS=ON`, stale optional executables may remain
@@ -73,6 +80,12 @@ disabled so an existing ROS installation cannot leak link dependencies into
 the standalone library. A system Ceres 2.2 installation is neither uninstalled
 nor overwritten, and project CMake uses `NO_DEFAULT_PATH` so it cannot be
 selected.
+
+The pinned `third_party/open_vins` submodule remains clean. The build creates
+an ignored local clone at `.deps/src/open_vins`, checks out the exact submodule
+commit, applies the reviewed ZUPT patch there, and requires the OpenVINS CMake
+cache to name that disposable source. This prevents a normal build from
+leaving the superproject dirty.
 
 ## Optional Python plotting and calibration tools
 

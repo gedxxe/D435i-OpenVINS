@@ -19,7 +19,11 @@ branches are evidence/recovery paths, not alternative runtime configurations.
 - [ ] CTest ran named tests; it did not print `No tests were found`.
 - [ ] All four executables report v0.5.2 and one source fingerprint.
 - [ ] Build cache points to repository-local Ceres 2.1.0.
-- [ ] Build cache points to repository-local librealsense 2.57.3.
+- [ ] Build cache points to repository-local patched librealsense 2.57.3.
+- [ ] Both reviewed patch files match the SHA-256 pins in
+  `cmake/DependencyVersions.cmake`.
+- [ ] `ldd` checks confirm `ovrs_inspect`, `ovrs_record`, and `ovrs_live`
+  load that repository-local library rather than `/usr/local/lib`.
 - [ ] OpenVINS v2.7 is pinned with ROS and ArUco integration disabled.
 
 If any item fails: stop before connecting estimator output to a test claim.
@@ -82,6 +86,8 @@ workflow. Never rename the key without inverting the matrix.
   `docs/selected_runtime.md`.
 - [ ] The selected 90 Hz stream SHA-256 matches and contains
   `gyro_sensitivity: 1` and `gyro_scale_factor: 1.0`.
+- [ ] `scripts/verify_selected_runtime.sh` passes its semantic sensitivity and
+  scale checks; passing only a manually updated file hash is insufficient.
 - [ ] The reviewed OpenVINS ZUPT patch SHA-256 matches
   `docs/selected_runtime.md`.
 - [ ] Both replay and live explicitly use `--online-time-offset off`.

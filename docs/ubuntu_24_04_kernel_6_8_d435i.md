@@ -390,8 +390,9 @@ PREFLIGHT_RESULT=PASS
 PREFLIGHT_RESULT=PASS_WITH_WARNINGS
 ```
 
-An understood warning about an unused system librealsense version may yield
-`PASS_WITH_WARNINGS`. Zero-rate IMU output is never an understood warning.
+An installed system librealsense may be reported as informational; the
+supported executables must still resolve the patched repository-local library.
+Zero-rate IMU output is never an understood warning.
 
 For a longer confirmation:
 

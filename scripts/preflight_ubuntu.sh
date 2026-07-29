@@ -135,6 +135,7 @@ info "Kernel: $(uname -r)"
 
 required_commands=(
   git cmake ctest ninja pkg-config gcc g++ grep sed awk diff wc date tee timeout
+  ldd readlink
   nproc install chmod cp dirname mkdir mktemp mv rm rmdir cmp sha256sum
 )
 for command_name in "${required_commands[@]}"; do
@@ -180,11 +181,15 @@ ceres_version="$(pin_value OVRS_CERES_VERSION)"
 ceres_commit="$(pin_value OVRS_CERES_COMMIT)"
 realsense_version="$(pin_value OVRS_LIBREALSENSE_VERSION)"
 realsense_commit="$(pin_value OVRS_LIBREALSENSE_COMMIT)"
+realsense_patch_sha256="$(pin_value OVRS_LIBREALSENSE_PATCH_SHA256)"
+openvins_patch_sha256="$(pin_value OVRS_OPENVINS_PATCH_SHA256)"
 kalibr_commit="$(pin_value OVRS_KALIBR_COMMIT)"
 allan_commit="$(pin_value OVRS_ALLAN_VARIANCE_ROS_COMMIT)"
 if [[ -n "${openvins_tag}" && -n "${openvins_commit}" &&
       -n "${ceres_version}" && -n "${ceres_commit}" &&
       -n "${realsense_version}" && -n "${realsense_commit}" &&
+      "${realsense_patch_sha256}" =~ ^[0-9a-f]{64}$ &&
+      "${openvins_patch_sha256}" =~ ^[0-9a-f]{64}$ &&
       -n "${kalibr_commit}" && -n "${allan_commit}" ]]; then
   pass "Dependency pins loaded: OpenVINS ${openvins_tag}, Ceres ${ceres_version}, librealsense ${realsense_version}."
   info "External calibration pins: Kalibr ${kalibr_commit}, allan_variance_ros ${allan_commit}."
@@ -205,26 +210,58 @@ else
   fail "External-calibration Dockerfile is missing or inconsistent."
 fi
 
-openvins_dir="${repo_dir}/third_party/open_vins"
+openvins_submodule_dir="${repo_dir}/third_party/open_vins"
+openvins_source_dir="${repo_dir}/.deps/src/open_vins"
 openvins_patch="${repo_dir}/patches/openvins-zupt-velocity-constraint.patch"
-if [[ -d "${openvins_dir}/.git" || -f "${openvins_dir}/.git" ]]; then
-  actual_openvins_commit="$(git -C "${openvins_dir}" rev-parse HEAD 2>/dev/null || true)"
+actual_openvins_patch_sha256="$(
+  sha256sum "${openvins_patch}" 2>/dev/null | awk '{print $1}' || true
+)"
+if [[ "${actual_openvins_patch_sha256}" == "${openvins_patch_sha256}" ]]; then
+  pass "OpenVINS patch matches its dependency SHA-256 pin."
+else
+  fail "OpenVINS patch SHA-256 is ${actual_openvins_patch_sha256:-unreadable}, expected ${openvins_patch_sha256:-missing pin}."
+fi
+if [[ -d "${openvins_submodule_dir}/.git" ||
+      -f "${openvins_submodule_dir}/.git" ]]; then
+  actual_openvins_commit="$(
+    git -C "${openvins_submodule_dir}" rev-parse HEAD 2>/dev/null || true
+  )"
   if [[ "${actual_openvins_commit}" == "${openvins_commit}" ]]; then
     pass "OpenVINS submodule is at ${actual_openvins_commit}."
   else
     fail "OpenVINS is ${actual_openvins_commit:-unreadable}, expected ${openvins_commit}."
   fi
-  if [[ -r "${openvins_patch}" ]] &&
-     ovrs_git_tracked_content_matches_patch \
-       "${openvins_dir}" "${openvins_patch}"; then
-    pass "OpenVINS exactly matches the reviewed project patch:" \
-      "ZUPT velocity constraint and read-only diagnostics."
+  if ovrs_git_tracked_content_is_clean "${openvins_submodule_dir}"; then
+    pass "OpenVINS submodule working tree is clean."
   else
-    fail "OpenVINS does not exactly match the reviewed project patch."
-    ovrs_git_print_tracked_content_changes "${openvins_dir}" || true
+    fail "OpenVINS submodule contains tracked changes; patches belong under .deps."
+    ovrs_git_print_tracked_content_changes "${openvins_submodule_dir}" || true
   fi
 else
   fail "OpenVINS submodule is not initialized."
+fi
+if [[ -d "${openvins_source_dir}/.git" ]]; then
+  actual_openvins_source_commit="$(
+    git -C "${openvins_source_dir}" rev-parse HEAD 2>/dev/null || true
+  )"
+  if [[ "${actual_openvins_source_commit}" == "${openvins_commit}" ]]; then
+    pass "Local OpenVINS build source is at ${actual_openvins_source_commit}."
+  else
+    fail "Local OpenVINS build source is ${actual_openvins_source_commit:-unreadable}, expected ${openvins_commit}."
+  fi
+  if [[ -r "${openvins_patch}" ]] &&
+     ovrs_git_tracked_content_matches_patch \
+       "${openvins_source_dir}" "${openvins_patch}"; then
+    pass "Local OpenVINS source exactly matches the reviewed project patch:" \
+      "ZUPT velocity constraint and read-only diagnostics."
+  else
+    fail "Local OpenVINS source does not exactly match the reviewed project patch."
+    ovrs_git_print_tracked_content_changes "${openvins_source_dir}" || true
+  fi
+elif [[ "${require_build}" -eq 1 ]]; then
+  fail "Local patched OpenVINS source is missing; run scripts/build_ubuntu.sh."
+else
+  warn "Local patched OpenVINS source is absent; build_ubuntu.sh will create it."
 fi
 
 check_pkg_config() {
@@ -296,19 +333,11 @@ else
   info "No system Ceres is visible through pkg-config."
 fi
 
-realsense_ok=0
-system_realsense_ok=0
 local_realsense_ok=0
 if command -v pkg-config >/dev/null 2>&1 &&
    pkg-config --exists realsense2 2>/dev/null; then
   system_realsense_version="$(pkg-config --modversion realsense2)"
-  if [[ "${system_realsense_version}" == "${realsense_version}" ]]; then
-    pass "System librealsense is exactly ${system_realsense_version}."
-    realsense_ok=1
-    system_realsense_ok=1
-  else
-    warn "System librealsense is ${system_realsense_version}; the build will ignore it and build ${realsense_version} locally."
-  fi
+  info "System-visible librealsense is ${system_realsense_version}; the supported build ignores it."
 fi
 local_realsense_pc="${repo_dir}/.deps/install/librealsense/lib/pkgconfig"
 if command -v pkg-config >/dev/null 2>&1 &&
@@ -320,22 +349,52 @@ if command -v pkg-config >/dev/null 2>&1 &&
   )"
   if [[ "${local_realsense_version}" == "${realsense_version}" ]]; then
     pass "Repository-local librealsense is exactly ${local_realsense_version}."
-    realsense_ok=1
     local_realsense_ok=1
   else
     fail "Repository-local librealsense is ${local_realsense_version}, expected ${realsense_version}."
   fi
 fi
-if [[ "${realsense_ok}" -eq 0 ]]; then
+if [[ "${local_realsense_ok}" -eq 0 ]]; then
   if [[ "${require_build}" -eq 1 ]]; then
-    fail "Pinned librealsense ${realsense_version} is unavailable; run build_ubuntu.sh."
+    fail "Patched repository-local librealsense ${realsense_version} is unavailable; run build_ubuntu.sh."
   else
-    warn "Pinned librealsense ${realsense_version} is not installed yet; build_ubuntu.sh will build it locally."
+    warn "Patched repository-local librealsense ${realsense_version} is not installed yet; build_ubuntu.sh will build it."
   fi
 fi
+realsense_source="${repo_dir}/.deps/src/librealsense"
+realsense_patch="${repo_dir}/patches/librealsense-rsusb-gyro-sensitivity.patch"
+actual_realsense_patch_sha256="$(
+  sha256sum "${realsense_patch}" 2>/dev/null | awk '{print $1}' || true
+)"
+if [[ "${actual_realsense_patch_sha256}" == "${realsense_patch_sha256}" ]]; then
+  pass "librealsense patch matches its dependency SHA-256 pin."
+else
+  fail "librealsense patch SHA-256 is ${actual_realsense_patch_sha256:-unreadable}, expected ${realsense_patch_sha256:-missing pin}."
+fi
+if [[ -d "${realsense_source}/.git" ]]; then
+  actual_realsense_commit="$(
+    git -C "${realsense_source}" rev-parse HEAD 2>/dev/null || true
+  )"
+  if [[ "${actual_realsense_commit}" == "${realsense_commit}" ]]; then
+    pass "librealsense source is at pinned commit ${actual_realsense_commit}."
+  else
+    fail "librealsense source is ${actual_realsense_commit:-unreadable}, expected ${realsense_commit}."
+  fi
+  if [[ -r "${realsense_patch}" ]] &&
+     ovrs_git_tracked_content_matches_patch \
+       "${realsense_source}" "${realsense_patch}"; then
+    pass "librealsense exactly matches the reviewed RSUSB gyro sensitivity patch."
+  else
+    fail "librealsense does not exactly match the reviewed RSUSB gyro sensitivity patch."
+    ovrs_git_print_tracked_content_changes "${realsense_source}" || true
+  fi
+elif [[ "${require_build}" -eq 1 ]]; then
+  fail "Pinned librealsense source is missing; run build_ubuntu.sh."
+else
+  warn "Pinned librealsense source is absent; build_ubuntu.sh will fetch and patch it."
+fi
 realsense_build_cache="${repo_dir}/.deps/build/librealsense/CMakeCache.txt"
-if [[ "${system_realsense_ok}" -eq 0 &&
-      "${local_realsense_ok}" -eq 1 &&
+if [[ "${local_realsense_ok}" -eq 1 &&
       -f "${realsense_build_cache}" ]]; then
   realsense_cache_safe=1
   for disabled_option in BUILD_EXAMPLES BUILD_GRAPHICAL_EXAMPLES BUILD_TOOLS \
@@ -478,7 +537,17 @@ done
 shopt -u nullglob
 
 main_cache="${repo_dir}/build/linux-release/CMakeCache.txt"
-openvins_cache="${repo_dir}/.deps/build/open_vins/CMakeCache.txt"
+openvins_cache="${repo_dir}/.deps/build/open_vins-local/CMakeCache.txt"
+local_realsense_prefix="${repo_dir}/.deps/install/librealsense"
+local_realsense_cmake=""
+for candidate in \
+  "${local_realsense_prefix}/lib/cmake/realsense2" \
+  "${local_realsense_prefix}/lib64/cmake/realsense2"; do
+  if [[ -f "${candidate}/realsense2Config.cmake" ]]; then
+    local_realsense_cmake="${candidate}"
+    break
+  fi
+done
 main_source_fingerprint=""
 current_source_fingerprint=""
 if current_source_fingerprint="$(
@@ -498,6 +567,15 @@ if [[ -f "${main_cache}" ]]; then
     pass "Main CMake cache resolves repository-local Ceres."
   else
     fail "Main CMake cache does not resolve the required local Ceres prefix."
+  fi
+  if [[ -n "${local_realsense_cmake}" ]] &&
+     ovrs_cmake_cache_value_equals \
+       "${main_cache}" OVRS_REALSENSE_PREFIX "${local_realsense_prefix}" &&
+     ovrs_cmake_cache_value_equals \
+       "${main_cache}" realsense2_DIR "${local_realsense_cmake}"; then
+    pass "Main CMake cache resolves repository-local patched librealsense."
+  else
+    fail "Main CMake cache does not resolve repository-local patched librealsense."
   fi
   if ovrs_cmake_cache_value_equals \
        "${main_cache}" OVRS_PROJECT_VERSION_RESOLVED "${project_version}"; then
@@ -528,6 +606,9 @@ if [[ -f "${openvins_cache}" ]]; then
        "${openvins_cache}" Ceres_DIR \
        "${ceres_prefix}/lib/cmake/Ceres" &&
      ovrs_cmake_cache_value_equals \
+       "${openvins_cache}" CMAKE_HOME_DIRECTORY \
+       "${openvins_source_dir}/ov_msckf" &&
+     ovrs_cmake_cache_value_equals \
        "${openvins_cache}" ENABLE_ROS OFF &&
      ovrs_cmake_cache_value_equals \
        "${openvins_cache}" ENABLE_ARUCO_TAGS OFF &&
@@ -535,9 +616,9 @@ if [[ -f "${openvins_cache}" ]]; then
        "${openvins_cache}" CMAKE_DISABLE_FIND_PACKAGE_catkin TRUE &&
      ovrs_cmake_cache_value_equals \
        "${openvins_cache}" CMAKE_DISABLE_FIND_PACKAGE_ament_cmake TRUE; then
-    pass "OpenVINS cache uses local Ceres and disables ROS/ArUco integration."
+    pass "OpenVINS cache uses the disposable patched source, local Ceres, and no ROS/ArUco."
   else
-    fail "OpenVINS cache does not enforce local Ceres and the non-ROS policy."
+    fail "OpenVINS cache does not enforce the disposable source, local Ceres, and non-ROS policy."
   fi
 elif [[ "${require_build}" -eq 1 ]]; then
   fail "OpenVINS CMake cache is absent; run scripts/build_ubuntu.sh."
@@ -562,6 +643,33 @@ for executable in ovrs_inspect ovrs_record ovrs_live ovrs_replay; do
       fail "${executable} reports the version but cannot be matched to current source content."
     else
       fail "${executable} is stale or does not match VERSION/source content."
+    fi
+    if [[ "${executable}" != "ovrs_replay" ]]; then
+      local_realsense_library=""
+      for candidate in \
+        "${local_realsense_prefix}/lib/librealsense2.so" \
+        "${local_realsense_prefix}/lib64/librealsense2.so"; do
+        if [[ -e "${candidate}" ]]; then
+          local_realsense_library="$(
+            readlink -f "${candidate}" 2>/dev/null || true
+          )"
+          break
+        fi
+      done
+      loaded_realsense_library="$(
+        ldd "${executable_path}" 2>/dev/null |
+          sed -n 's/^[[:space:]]*librealsense2[^=]*=>[[:space:]]*\([^[:space:]]*\).*/\1/p' |
+          sed -n '1p'
+      )"
+      loaded_realsense_library="$(
+        readlink -f "${loaded_realsense_library}" 2>/dev/null || true
+      )"
+      if [[ -n "${local_realsense_library}" &&
+            "${loaded_realsense_library}" == "${local_realsense_library}" ]]; then
+        pass "${executable} loads repository-local patched librealsense."
+      else
+        fail "${executable} loads ${loaded_realsense_library:-no librealsense}, expected ${local_realsense_library:-missing local library}."
+      fi
     fi
   elif [[ "${require_build}" -eq 1 ]]; then
     fail "${executable} is missing; run scripts/build_ubuntu.sh."

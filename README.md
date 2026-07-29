@@ -56,10 +56,12 @@ config/local/d435i-843212070146/selected_runtime/estimator.yaml
 
 That setup is still marked `BOOTSTRAP_UNVERIFIED`. It is suitable for testing
 and comparison, but it is not a certified accuracy profile. Tests with the
-physical camera fixed the earlier runaway caused by a gyro scale of `0.5`.
-Marked-position tests still showed some endpoint drift, especially in poor
-light. See [the selected runtime notes](docs/selected_runtime.md) for the
-measurements and the reasons behind the current 90 Hz setup.
+physical camera found an RSUSB gyro-sensitivity encoding error in the pinned
+librealsense source. The supported build applies a reviewed host-side patch and
+keeps the runtime gyro scale at `1.0`. Marked-position tests still showed some
+endpoint drift, especially in poor light. See
+[the selected runtime notes](docs/selected_runtime.md) for the measurements
+and the limits of the current 90 Hz setup.
 
 ## How it works
 
@@ -136,6 +138,13 @@ ctest --preset portable-core --output-on-failure
 The portable build checks only the portable code. It does not test
 librealsense, OpenVINS, or a physical D435i.
 
+The full Ubuntu build always uses the pinned, repository-local librealsense
+with the reviewed RSUSB gyro patch. A same-version library under `/usr/local`
+or another system path is deliberately ignored. Dependency patch hashes are
+pinned in `cmake/DependencyVersions.cmake`; the registered repository test
+runs the selected-runtime verifier and rejects a stream scale other than
+`1.0`.
+
 ## Run the live viewer
 
 Connect the selected D435i directly to USB 3 and run this from the repository
@@ -199,7 +208,7 @@ apps/                 command-line programs
 include/ovrs/, src/   capture, synchronization, estimator adapter, and logging
 config/               stream and estimator settings
 docs/                 guides, design notes, and test records
-patches/              reviewed changes applied to the pinned OpenVINS version
+patches/              reviewed changes for pinned third-party dependencies
 scripts/              build, validation, calibration, and plotting tools
 tests/                unit tests, synthetic replay tests, and repository checks
 third_party/open_vins pinned OpenVINS submodule

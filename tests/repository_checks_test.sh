@@ -59,7 +59,17 @@ if git -C "${repo_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   done
 fi
 
+openvins_submodule="${repo_dir}/third_party/open_vins"
+if [[ -d "${openvins_submodule}/.git" ||
+      -f "${openvins_submodule}/.git" ]]; then
+  if ! ovrs_git_tracked_content_is_clean "${openvins_submodule}"; then
+    echo "OpenVINS submodule must remain clean; build patches belong under .deps." >&2
+    exit 1
+  fi
+fi
+
 bash -n "${repo_dir}/scripts/verify_selected_runtime.sh"
+"${repo_dir}/scripts/verify_selected_runtime.sh" >/dev/null
 
 for markdown_file in \
   "${repo_dir}/README.md" \

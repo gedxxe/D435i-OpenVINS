@@ -3,7 +3,61 @@
 This is the reproducible diagnostic baseline for the D435i currently
 calibrated in this checkout. It is not an accepted drift-safe runtime.
 
-## 2026-07-29 official EEPROM recalibration and gyro-scale replacement
+## 2026-07-29 RSUSB gyro root cause and host-side correction
+
+A later operator-cued capture reproduced the old runaway after the repository
+cleanup, even though the selected configuration, OpenVINS patch, and replay
+outputs were byte-identical to their pre-cleanup copies. Independent stereo
+triangulation and PnP on
+`datasets/vio_pitch_up_20260729T120744Z` measured visual rotations of 6.122,
+6.827, and 9.973 degrees over three 0.5-second windows. Integrated SDK gyro
+over the same windows measured 12.157, 13.511, and 19.385 degrees: ratios of
+1.986, 1.979, and 1.944. Stereo positive-depth fraction was 100%, with 103 to
+288 PnP inliers in these windows. A diagnostic dataset copy changing only
+gyro values by 0.5 then completed replay without the 3 m/s runaway. The
+tracked selected runtime and original dataset were not changed.
+
+The cause is in the pinned librealsense 2.57.3 RSUSB backend. The public option
+maps sensitivity levels 1 through 4 to `0.1` through `0.4`, but the backend
+casts that floating-point value directly to an unsigned feature-report field.
+All four values therefore become zero on the wire while the cached API option
+still reports the requested level. This explains why readback alone did not
+detect the bad acquisition state and why choosing a permanent project scale
+of either 0.5 or 1.0 was not safe.
+
+`patches/librealsense-rsusb-gyro-sensitivity.patch` encodes the report field in
+its 0.1 units. The full Ubuntu build now always builds and loads this exact
+repository-local patched SDK; same-version libraries under `/usr/local` or
+other system paths are rejected.
+
+Connected capture `datasets/vio_rsusb_sensitivity_fix_20260729T1315Z` used
+firmware 5.17.3.10, sensitivity level 1, motion correction, Global Time, and
+the unchanged runtime scale 1.0. It recorded 2242 stereo pairs and 4984
+synchronized IMU rows over 25.49 seconds with every drop/error counter at
+zero. Three strong 0.5-second windows measured:
+
+| Window | Visual rotation | Gyro rotation |
+| --- | ---: | ---: |
+| 1 | 5.010° | 5.052° |
+| 2 | 13.497° | 13.287° |
+| 3 | 12.078° | 12.076° |
+
+Selected-runtime replay reached the final dataset timestamp at 24.99 seconds,
+with 22.83 seconds of logged initialized trajectory, without the safety gate.
+Its maximum estimated speed was 0.126 m/s and final displacement was 0.0778 m;
+the operator was still moving near the end, so this is not a return-to-origin
+accuracy claim. It does establish that the patched host acquisition and scale
+1.0 agree for the tested physical session.
+
+A later 323.97-second connected live-viewer smoke test used the same patched
+host path and selected runtime. It sustained 89.59 Hz stereo and 199.20 Hz
+synchronized IMU with zero drops, remained `HEALTHY`, and ended at
+0.0011 m/s. Its estimated path was 55.50 m and final displacement was 1.709 m,
+but the physical path was not measured. This proves long-running transport,
+viewer, and stop-recovery operation only; it is not trajectory-accuracy
+evidence.
+
+## Earlier official EEPROM recalibration and gyro-scale A/B
 
 The official `rs-imu-calibration-fixed.py` workflow collected 6000
 measurements, reported a corrected norm of 9.803658 m/s^2 against the
@@ -125,9 +179,9 @@ physical path bounds.
 
 `datasets/vio_pitch_cued_20260729T035200Z` completed a 30.374-second hardware
 capture with 2691 stereo pairs, 5984 synchronized IMU rows, and zero camera,
-timestamp, callback, or queue errors. The requested 90 Hz profile, gyro
-sensitivity 1, gyro scale 0.5, motion correction, and Global Time were all
-active.
+timestamp, callback, or queue errors. This superseded historical capture used
+the requested 90 Hz profile, gyro sensitivity 1, gyro scale 0.5, motion
+correction, and Global Time. It is not the active acquisition policy.
 
 The recorded IMU, rather than the intended cue schedule, defines the physical
 test: the camera remained level through about 12 seconds, rotated roughly 90
@@ -206,11 +260,16 @@ The selected files are bound to this review:
 | `estimator.yaml` | `be37da3454190ba262a204afa709ee58d034784814e3a7c09fb629be02479867` |
 | `post_rs_imu_candidate_a_imu.yaml` | `c23713d7830e2d76e7d281edb0f8decb192a7f740ef15af0927d38d2816fa830` |
 | `post_rs_imu_candidate_a_imucam.yaml` | `0e911d87f1d2f508de1e9504354272220a999e76d821c9e4dc6b3a6fd3006f4f` |
-| `config/sensors/realsense_streams_vio_90hz.yaml` | `cc0cf24730f056dcd6af1d2eebcac21bc3c6e3266e752a17b0d86e61fa8cff03` |
+| `config/sensors/realsense_streams_vio_90hz.yaml` | `c040d24b331c7c2e0e27ed39f329c52b8b2868795b0c9d76279bf521c4389f53` |
+| `patches/librealsense-rsusb-gyro-sensitivity.patch` | `0143655d0694cd2fc0f911b54ed38de98fbf08f61fd037c986e3e9c8872feba5` |
 | `patches/openvins-zupt-velocity-constraint.patch` | `000c826231727ee10cf240d89469e956e44028ddaff5cf3ccb2c744b92368d37` |
 
 `scripts/verify_selected_runtime.sh` is the single executable check for this
-table. README commands call that script instead of duplicating the hashes.
+table. Patch hashes come from `cmake/DependencyVersions.cmake`; calibration and
+stream hashes remain bound here. The verifier also requires
+`gyro_sensitivity: 1` and `gyro_scale_factor: 1.0`, so updating a hash cannot
+silently promote the rejected scale. README commands and the registered
+repository CTest call that script instead of duplicating the checks.
 
 The files under `config/local/` are serial-specific. Never copy them to
 another camera. The bundle remains `BOOTSTRAP_UNVERIFIED`, so
@@ -257,8 +316,8 @@ gyro_sensitivity_active: 1
 gyro_scale_factor_applied: 1
 ```
 
-The current direct-SDK policy is explicit rather than inferred during replay.
-The former `0.5` selection had this historical evidence:
+The project scale remains explicit and is never inferred during replay. The
+former `0.5` selection had this historical evidence:
 
 - a clean moving level-1 capture and an independent strong moving level-0
   capture both measured approximately twice as much integrated SDK gyro
@@ -275,19 +334,22 @@ The former `0.5` selection had this historical evidence:
 - representative corrected comparisons were 13.667 vs 13.931 degrees and
   11.869 vs 11.683 degrees for visual vs gyro rotation.
 
-That evidence did not generalize after the official EEPROM recalibration. On
-the new identical post-calibration dataset, `0.5` caused a safety-gate failure
-while `1.0` completed; a connected 131-second `1.0` live run independently
-avoided runaway. The selected factor is therefore now `1.0`.
+That workaround did not generalize. A later post-calibration dataset required
+`1.0`, and the new pitch capture again required a diagnostic 0.5 correction.
+The alternating result was not caused by calibration YAML or repository
+cleanup; it exposed the pinned RSUSB option-encoding bug documented above.
+With that host-side bug fixed, a connected capture measured visual and gyro
+rotation one-to-one while the selected project scale remained `1.0`.
 
 Historical datasets are never modified and replay is never silently
 rescaled. A legacy dataset without the scale fields is replayed exactly as
 recorded. New calibration exports bind the scale from the Allan and
 camera-IMU captures and reject disagreement.
 
-The `1.0` selection is serial- and device-calibration-state-bound.
-Recalibration, firmware changes, or a different camera require a fresh moving
-visual/gyro cross-check.
+The runtime `1.0` selection and calibration remain serial- and
+device-calibration-state-bound. The RSUSB encoding patch is part of the pinned
+host dependency contract. Recalibration, firmware changes, SDK changes, or a
+different camera still require a fresh moving visual/gyro cross-check.
 
 ## Stop-recovery policy
 
@@ -327,7 +389,7 @@ sharp non-repeating static structure visible in both IR cameras. Avoid blank
 walls, repeating patterns, moving foreground objects, saturation, occlusion,
 and whip motion.
 
-1. Verify all five hashes and pass both preflight commands.
+1. Verify all six hashes and pass both preflight commands.
 2. Hold the camera still until initialization and for several seconds after.
 3. Move smoothly. Before stopping, decelerate rather than snapping the camera.
 4. Hold the final pose still for at least two seconds so the one-second

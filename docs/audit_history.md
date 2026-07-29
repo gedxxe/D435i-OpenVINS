@@ -6,8 +6,46 @@ Release audited: **v0.5.2**
 
 ## Final verdict
 
-**GYRO 0.5 RUNAWAY FIXED; RESIDUAL PITCH-MOTION DRIFT REMAINS; DIAGNOSTIC
+**RSUSB GYRO-SCALE RUNAWAY FIXED; RESIDUAL VIO DRIFT REMAINS; DIAGNOSTIC
 USE ONLY**
+
+### 2026-07-29 RSUSB gyro-sensitivity root cause
+
+A new zero-drop pitch capture reproduced the 3 m/s runaway after cleanup.
+Byte-identical configuration and replay evidence ruled out the cleanup as the
+cause. Independent stereo PnP measured 6.122, 6.827, and 9.973 degrees while
+the SDK gyro integrated 12.157, 13.511, and 19.385 degrees over the same
+0.5-second windows.
+
+The pinned librealsense 2.57.3 RSUSB backend maps sensitivity levels to
+`0.1`-unit values and then truncates them directly into an unsigned
+feature-report field. Its API readback is cached, so requested and active
+level 1 can still be reported while zero is sent on the wire.
+`patches/librealsense-rsusb-gyro-sensitivity.patch` corrects that encoding.
+The supported build now always uses the patched repository-local library and
+preflight rejects hardware executables that resolve `/usr/local` or another
+system copy.
+
+A connected patched capture retained 2242 stereo pairs and 4984 synchronized
+IMU rows with zero integrity errors. Three strong visual/gyro comparisons were
+5.010/5.052, 13.497/13.287, and 12.078/12.076 degrees with the selected project
+scale unchanged at `1.0`. Replay completed without the speed gate. This fixes
+the demonstrated acquisition-scale runaway, not standalone VIO endpoint drift
+or absolute trajectory accuracy.
+
+Dependency patch hashes are now pinned beside dependency commits in
+`cmake/DependencyVersions.cmake`. Build and preflight reject a changed patch
+before using it, the selected-runtime verifier semantically requires
+sensitivity 1 and gyro scale 1.0, and the registered repository CTest executes
+that verifier. This closes the earlier gap where a manually updated hash table
+could have promoted the rejected scale or an unreviewed dependency patch.
+
+A subsequent 323.97-second live-viewer run on the patched path retained zero
+stereo/IMU drops, 89.59/199.20 Hz final rates, and a healthy final state. Stop
+recovery reduced final speed to 0.0011 m/s, but the estimate ended 1.709 m from
+its origin after a 55.50 m estimated path. The operator did not provide a
+measured physical path, so this is transport and long-run stability evidence,
+not a position-accuracy result.
 
 ### 2026-07-29 code and documentation cleanup
 
@@ -101,9 +139,9 @@ and gyro-scale A/B above supersede the old `0.5` acquisition policy, but
 residual position drift still requires controlled physical bounds before
 accuracy acceptance.
 
-### 2026-07-28 selected-runtime addendum
+### Historical 2026-07-28 selected-runtime addendum (superseded)
 
-The active configuration is now the serial-specific local bundle:
+The same serial-specific bundle path remains active:
 
 ```text
 config/local/d435i-843212070146/selected_runtime/estimator.yaml
@@ -123,7 +161,7 @@ the Allan noise capture predates the official RealSense IMU table update.
 Operational selection does not satisfy the repository's strict
 `KALIBR_VERIFIED` promotion contract.
 
-Evidence for the current selection:
+Evidence retained from that historical selection:
 
 - candidate A camera residuals were 0.291736 px and 0.281472 px, tighter than
   candidate B;
@@ -1571,7 +1609,8 @@ double-left-click reset, and `q`/Escape clean shutdown.
 
 The reproducibility contract now binds controlled diagnostic runs to:
 
-- D435i serial `843212070146` and the five recorded SHA-256 values;
+- D435i serial `843212070146` and the then-current five recorded SHA-256
+  values;
 - the selected 848x480 stereo/IMU stream policy;
 - fixed -4.900203074 ms camera-IMU offset with online estimation off;
 - initialization ZUPT plus the reviewed visually gated one-second stop
@@ -1594,7 +1633,7 @@ Validation performed after the change:
 - Linux release CTest: 4/4 passed;
 - portable-core configure/build/CTest: 4/4 passed;
 - selected-runtime, acquisition, and reviewed-patch SHA-256 checks: all five
-  passed;
+  then-recorded values passed;
 - `./scripts/preflight_ubuntu.sh --require-build`: passed with one expected
   warning because no D435i was connected;
 - a stored-dataset GUI replay opened and rendered the new viewer, then

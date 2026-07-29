@@ -1094,21 +1094,23 @@ class CalibrationScriptTests(unittest.TestCase):
     @unittest.skipUnless(
         (
             REPOSITORY
-            / "third_party"
+            / ".deps"
+            / "src"
             / "open_vins"
             / "ov_msckf"
             / "src"
             / "core"
             / "VioManager.h"
         ).is_file(),
-        "OpenVINS submodule is not initialized",
+        "patched OpenVINS build source is not available",
     )
     def test_visual_diagnostics_use_current_tracks_and_msckf_batches(
         self,
     ) -> None:
         manager_header = (
             REPOSITORY
-            / "third_party"
+            / ".deps"
+            / "src"
             / "open_vins"
             / "ov_msckf"
             / "src"
@@ -1117,7 +1119,8 @@ class CalibrationScriptTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         manager_source = (
             REPOSITORY
-            / "third_party"
+            / ".deps"
+            / "src"
             / "open_vins"
             / "ov_msckf"
             / "src"
@@ -1144,19 +1147,21 @@ class CalibrationScriptTests(unittest.TestCase):
     @unittest.skipUnless(
         (
             REPOSITORY
-            / "third_party"
+            / ".deps"
+            / "src"
             / "open_vins"
             / "ov_msckf"
             / "src"
             / "update"
             / "UpdaterZeroVelocity.cpp"
         ).is_file(),
-        "OpenVINS submodule is not initialized",
+        "patched OpenVINS build source is not available",
     )
     def test_zupt_patch_requires_visual_and_inertial_gates(self) -> None:
         source = (
             REPOSITORY
-            / "third_party"
+            / ".deps"
+            / "src"
             / "open_vins"
             / "ov_msckf"
             / "src"
@@ -1310,6 +1315,8 @@ class CalibrationScriptTests(unittest.TestCase):
             )
 
     def test_capture_binds_explicit_gyro_sensitivity(self) -> None:
+        # Use historical non-default provenance to prove export is lossless.
+        # The selected-runtime verifier independently requires scale 1.0.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             capture = root / "capture"

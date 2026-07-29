@@ -6,6 +6,16 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Fixed the pinned librealsense 2.57.3 RSUSB gyro-sensitivity feature-report
+  encoding and made the patched repository-local build mandatory. Patch
+  SHA-256 values now live beside dependency commit pins, are checked before
+  build or preflight, and are exercised by CTest through the selected-runtime
+  verifier. The active stream is semantically required to retain sensitivity
+  level 1 and project gyro scale 1.0.
+- Stopped patching the tracked OpenVINS submodule in place. Full builds now
+  keep the pinned submodule clean, apply the reviewed ZUPT patch to an ignored
+  local clone under `.deps`, and verify the dependency build cache resolves
+  that disposable source.
 - Made reviewed `selected_runtime` YAML bundles publishable while keeping raw
   calibration captures, factory exports, and candidate bundles ignored.
   Repository checks now reject an ignored selected runtime.

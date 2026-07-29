@@ -110,12 +110,17 @@ use project-owned structs.
 OpenVINS is built from its `ov_msckf` directory with `ENABLE_ROS=OFF` and
 `ENABLE_ARUCO_TAGS=OFF`; `catkin` and `ament_cmake` package discovery are
 disabled as well. Ubuntu 24.04 uses repository-local Ceres 2.1.0 because
-OpenVINS v2.7 still uses `LocalParameterization`.
+OpenVINS v2.7 still uses `LocalParameterization`. The tracked OpenVINS
+submodule stays clean; its reviewed patch is applied to an ignored clone under
+`.deps/src/open_vins`, and the build cache is checked against that source.
 
 librealsense v2.57.3 is pinned because its release line explicitly includes
-Ubuntu 24.04. The official package route is acceptable when the exact version
-is available. The repository-local RSUSB build is the fallback and does not
-patch kernel modules.
+Ubuntu 24.04. The supported build always uses its repository-local RSUSB
+checkout with `patches/librealsense-rsusb-gyro-sensitivity.patch`; a system
+library is not accepted by version alone. The patch corrects host-side
+feature-report encoding and does not patch kernel modules, firmware, or EEPROM.
+Dependency commits and reviewed patch hashes are pinned together in
+`cmake/DependencyVersions.cmake`.
 
 ## Frames and output
 
