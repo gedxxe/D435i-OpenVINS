@@ -85,7 +85,7 @@ graphical Ubuntu session:
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
   LIVE_RUN="runs/live_diagnostic_${RUN_ID}"
 
-  ./scripts/verify_selected_runtime.sh
+  ./scripts/verify_selected_runtime.sh --serial "${D435I_SERIAL}"
 
   ./scripts/preflight_ubuntu.sh --require-build
   ./scripts/preflight_ubuntu.sh \
@@ -228,27 +228,27 @@ Let ${}^{G}\!R_I$ rotate an IMU-frame vector into the global frame. With
 gyroscope bias $b_g$, accelerometer bias $b_a$, white measurement noises
 $n_g,n_a$, and global gravity ${}^{G}\!g$, the basic calibrated IMU model is
 
-$$
+```math
 \omega_m = \omega + b_g + n_g,
 \qquad
 a_m = {}^{I}\!R_G\left({}^{G}\!a_I-{}^{G}\!g\right)+b_a+n_a.
-$$
+```
 
 The continuous navigation state evolves as
 
-$$
+```math
 \dot{{}^{G}\!R_I}
   = {}^{G}\!R_I[\omega_m-b_g-n_g]_\times,
 \qquad
 \dot{{}^{G}\!p_I} = {}^{G}\!v_I,
-$$
+```
 
-$$
+```math
 \dot{{}^{G}\!v_I}
   = {}^{G}\!R_I(a_m-b_a-n_a)+{}^{G}\!g,
 \qquad
 \dot b_g=n_{wg},\quad \dot b_a=n_{wa}.
-$$
+```
 
 Here $[\cdot]_\times$ is the skew-symmetric cross-product matrix, while
 $n_{wg}$ and $n_{wa}$ drive bias random walks. The default runtime uses
@@ -269,27 +269,27 @@ Librealsense supplies motion values in rad/s and m/s². The generic
 `StreamConfig` default preserves SDK gyro rad/s with scale `1.0`; the selected
 serial now explicitly uses the post-calibration selected factor $s_g=1.0$:
 
-$$
+```math
 \omega_{\mathrm{used}}=s_g\,\omega_{\mathrm{SDK}}.
-$$
+```
 
 The accelerometer measurement is rotated with the device-reported
 accel-to-gyro rotation:
 
-$$
+```math
 a_{\mathrm{gyro}}^{\text{sample}}
 =R_{\mathrm{gyro}\leftarrow\mathrm{accel}}\,
  a_{\mathrm{accel}}^{\text{sample}}.
-$$
+```
 
 Because the configured accelerometer and gyro rates differ, acceleration at a
 gyro timestamp $t_g\in[t_{a0},t_{a1}]$ is
 
-$$
+```math
 \alpha=\frac{t_g-t_{a0}}{t_{a1}-t_{a0}},
 \qquad
 a(t_g)=(1-\alpha)a(t_{a0})+\alpha a(t_{a1}).
-$$
+```
 
 Raw device timestamps remain beside normalized seconds so synchronization can
 be audited. The runtime requires the exact configured motion profiles instead
@@ -300,15 +300,15 @@ of silently substituting the nearest available rates.
 For a rectified pinhole stereo pair with focal length $f_x$, baseline $b$,
 and disparity $d=u_L-u_R$, approximate depth is
 
-$$
+```math
 Z \approx \frac{f_x b}{d}.
-$$
+```
 
 First-order uncertainty therefore grows approximately as
 
-$$
+```math
 \sigma_Z \approx \frac{Z^2}{f_x b}\,\sigma_d.
-$$
+```
 
 The D435i's short stereo baseline means distant, low-disparity features have
 weak depth conditioning. Fast blur, repeated texture, poor exposure, bad
@@ -318,11 +318,11 @@ even if the IMU stream is numerically smooth.
 The runtime transform key is `T_imu_cam`, which maps a homogeneous point from
 camera coordinates into IMU coordinates:
 
-$$
+```math
 \begin{bmatrix}p_I\\1\end{bmatrix}
 =T_{\mathrm{imu}\leftarrow\mathrm{cam}}
 \begin{bmatrix}p_C\\1\end{bmatrix}.
-$$
+```
 
 Kalibr's opposite-direction output is inverted only at the reviewed promotion
 boundary.
@@ -331,32 +331,32 @@ boundary.
 
 For a tracked feature, the linearized pixel residual over its observations is
 
-$$
+```math
 r \approx H_x\tilde x + H_f\tilde p_f+n.
-$$
+```
 
 MSCKF does not need to retain that feature as a permanent map landmark.
 Instead, it finds a left-nullspace basis $N$ satisfying
 $N^\mathsf{T}H_f=0$, then projects
 
-$$
+```math
 r_o=N^\mathsf{T}r
 \approx N^\mathsf{T}H_x\tilde x+N^\mathsf{T}n.
-$$
+```
 
 The resulting constraint updates the navigation state while eliminating the
 unknown feature error. For $H=N^\mathsf{T}H_x$ and projected noise
 covariance $R$, the EKF update follows
 
-$$
+```math
 S=HPH^\mathsf{T}+R,\qquad
 K=PH^\mathsf{T}S^{-1},
-$$
+```
 
-$$
+```math
 \delta x=Kr_o,\qquad
 P^+=(I-KH)P^-.
-$$
+```
 
 The project keeps OpenVINS First-Estimate Jacobians enabled to preserve the
 intended observability/consistency behavior.
@@ -366,10 +366,10 @@ intended observability/consistency behavior.
 The local OpenVINS patch adds the missing velocity observation only after
 inertial and visual stationarity agree. For a zero-velocity residual,
 
-$$
+```math
 r_v=0-\hat v_I,\qquad H_v=
 \begin{bmatrix}0&0&I_3&0&0\end{bmatrix}.
-$$
+```
 
 Low feature disparity is an additional gate. Missing visual tracks mean
 “unknown,” not “stationary.” The serial-specific selected runtime permits
@@ -2027,7 +2027,7 @@ SELECTED_DIR="config/local/d435i-${D435I_SERIAL}/selected_runtime"
 ESTIMATOR_CONFIG="${SELECTED_DIR}/estimator.yaml"
 STREAM_CONFIG="config/sensors/realsense_streams_vio_90hz.yaml"
 
-./scripts/verify_selected_runtime.sh
+./scripts/verify_selected_runtime.sh --serial "${D435I_SERIAL}"
 
 test "$(sed -n 's/^[[:space:]]*calibrated_serial:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' \
   "${ESTIMATOR_CONFIG}")" = "${D435I_SERIAL}"
@@ -2047,6 +2047,8 @@ still, 20-50 seconds smooth outbound translation and rotation, 50-65 seconds
 smooth return, and 65-120 seconds still:
 
 ```bash
+: "${D435I_SERIAL:?Select the current camera serial first}"
+: "${STREAM_CONFIG:?Select the current stream configuration first}"
 VIO_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 VIO_DATASET="datasets/vio_selected_${VIO_RUN_ID}"
 
@@ -2067,6 +2069,7 @@ fi
 Reject the capture before replay unless the acquisition contract is present:
 
 ```bash
+: "${VIO_DATASET:?Complete the Step 12 recording first}"
 test "$(sed -n 's/^gyro_sensitivity_requested:[[:space:]]*//p' \
   "${VIO_DATASET}/device_report.yaml")" = "1"
 test "$(sed -n 's/^gyro_sensitivity_available:[[:space:]]*//p' \
@@ -2138,6 +2141,7 @@ realtime:
 : "${REPLAY_ACCEPTED:?Replay must pass the declared physical bounds first}"
 : "${ESTIMATOR_CONFIG:?Select the current estimator first}"
 : "${D435I_SERIAL:?Select the exact serial first}"
+: "${STREAM_CONFIG:?Select the current stream configuration first}"
 LIVE_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 LIVE_RUN="runs/live_selected_${LIVE_RUN_ID}"
 

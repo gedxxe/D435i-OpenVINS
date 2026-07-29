@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="260" viewBox="0 0 1280 260" role="img" aria-labelledby="title desc">
+  <title id="title">Support D435i OpenVINS Standalone</title>
+  <desc id="desc">A small invitation to star the repository, share a reproducible run, or open an issue.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.58" stop-color="#102d46"/>
+      <stop offset="1" stop-color="#0b1828"/>
+    </linearGradient>
+    <linearGradient id="trajectory" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#35d0ba"/>
+      <stop offset="1" stop-color="#66a8ff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="260" rx="26" fill="url(#background)"/>
+  <g opacity="0.12" stroke="#8dc8ff" stroke-width="1">
+    <path d="M0 65H1280M0 130H1280M0 195H1280"/>
+    <path d="M80 0V260M160 0V260M240 0V260M320 0V260M400 0V260M480 0V260M560 0V260M640 0V260M720 0V260M800 0V260M880 0V260M960 0V260M1040 0V260M1120 0V260M1200 0V260"/>
+  </g>
+
+  <g transform="translate(54 42)">
+    <path d="M16 150C62 121 78 138 108 103S165 88 194 56S246 54 278 24" fill="none" stroke="url(#trajectory)" stroke-width="8" stroke-linecap="round" filter="url(#glow)"/>
+    <circle cx="16" cy="150" r="7" fill="#35d0ba"/>
+    <circle cx="108" cy="103" r="7" fill="#48c5d4"/>
+    <circle cx="194" cy="56" r="7" fill="#58b6e9"/>
+    <circle cx="278" cy="24" r="8" fill="#66a8ff"/>
+    <path d="M16 150H67" stroke="#ff6b6b" stroke-width="4" stroke-linecap="round"/>
+    <path d="M16 150V99" stroke="#62d68b" stroke-width="4" stroke-linecap="round"/>
+    <path d="M16 150L52 119" stroke="#66a8ff" stroke-width="4" stroke-linecap="round"/>
+    <g font-family="Arial, sans-serif" font-size="14" font-weight="700">
+      <text x="73" y="155" fill="#ff8d8d">X</text>
+      <text x="11" y="91" fill="#79e59d">Y</text>
+      <text x="58" y="115" fill="#8fc0ff">Z</text>
+    </g>
+  </g>
+
+  <g font-family="Arial, sans-serif">
+    <text x="390" y="87" fill="#f4f8fb" font-size="31" font-weight="700">Useful in your lab?</text>
+    <text x="390" y="129" fill="#b9cfdf" font-size="20">Star the repository, share a reproducible run,</text>
+    <text x="390" y="159" fill="#b9cfdf" font-size="20">or open an issue with the evidence you found.</text>
+  </g>
+
+  <g transform="translate(984 82)">
+    <rect width="224" height="76" rx="18" fill="#17374b" stroke="#66a8ff" stroke-width="2"/>
+    <path d="M42 19L49 34L66 36L53 47L57 64L42 55L27 64L31 47L18 36L35 34Z" fill="#e9b949"/>
+    <text x="139" y="48" text-anchor="middle" fill="#f4f8fb" font-family="Arial, sans-serif" font-size="21" font-weight="700">Star on GitHub</text>
+  </g>
+</svg>

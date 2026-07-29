@@ -6,6 +6,18 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Split calibration and estimator-bundle validation out of the generic
+  application-support module. `app_support` now contains only process, file,
+  CLI, and version helpers; the public calibration contract has its own header
+  and source file with unchanged validation behavior.
+- Removed an orphaned historical environment report whose evidence already
+  lives in `docs/audit_history.md`, and kept legacy transform-direction detail
+  in the calibration documentation instead of the root README. Repository
+  checks now reject broken local Markdown links and stale numbered README
+  references, and bind the three primary runtime documents to the explicit
+  selected serial, 90 Hz stream, and fixed time-offset policy.
+- Removed an unreferenced pre-v0.4 local-bundle migration script. Current
+  calibration migration and promotion paths remain documented and tested.
 - Fixed the pinned librealsense 2.57.3 RSUSB gyro-sensitivity feature-report
   encoding and made the patched repository-local build mandatory. Patch
   SHA-256 values now live beside dependency commit pins, are checked before
@@ -20,10 +32,11 @@ current tree; they must not be read as claims that historical Git tags exist.
   calibration captures, factory exports, and candidate bundles ignored.
   Repository checks now reject an ignored selected runtime.
 - Rewrote the root README in plain English and added project/stack badges, the
-  GPLv3 and author details, and a clickable live-viewer guide. The complete
-  calibration procedure moved to `docs/operator_runbook.md`, historical audit
-  detail moved to `docs/audit_history.md`, and mathematical notation moved to
-  a focused GitHub-renderable document using `$...$` inline delimiters.
+  GPLv3 and author details, a clickable live-viewer guide, and a restrained
+  community card. The complete calibration procedure moved to
+  `docs/operator_runbook.md`, historical audit detail moved to
+  `docs/audit_history.md`, and mathematical notation moved to a focused
+  GitHub-renderable document using inline math and fenced `math` blocks.
 - Moved the 1,099-line inline implementation out of
   `include/ovrs/app_support.hpp` into `src/app_support.cpp`. CLI and test users
   now include YAML parsing declarations explicitly instead of relying on a

@@ -27,7 +27,8 @@ legacy local factory bundle containing `T_cam_imu` must pass through
 `scripts/migrate_openvins_transform_v050.py` before use.
 
 The factory bundle remains `BOOTSTRAP_UNVERIFIED` and is blocked by default.
-The full Allan/Kalibr workflow in the root README can create a strict
+The full Allan/Kalibr workflow in the
+[operator runbook](../../docs/operator_runbook.md) can create a strict
 `KALIBR_VERIFIED` bundle under
 `config/local/d435i-SERIAL/kalibr/estimator.yaml`.
 

@@ -2,9 +2,10 @@
 
 This checklist is a stop/go sequence for one D435i serial. Do not skip a failed
 gate. Record command output and artifact paths beside each checkbox. Commands
-assume the root README section 2 has set `D435I_SERIAL` for runtime gates.
-README Step 8 has its own explicit serial/target state gate and must be rerun
-after a reboot or terminal restart.
+that use shell state define or guard it locally. Calibration capture
+[Step 8 in the operator runbook](operator_runbook.md#8-capture-three-independent-calibration-datasets)
+has its own serial/target state gate and must be rerun after a reboot or
+terminal restart.
 
 For normal operation of serial `843212070146`, use the selected-runtime branch
 and `docs/selected_runtime.md`. The factory-smoke and replacement-calibration
@@ -50,7 +51,7 @@ If enumeration succeeds but sampling fails: treat the camera gate as failed.
 Inspect the active camera YAML:
 
 ```bash
-test "${D435I_SERIAL}" = "843212070146"
+D435I_SERIAL="843212070146"
 ACTIVE_CAMERA_YAML="config/local/d435i-${D435I_SERIAL}/selected_runtime/post_rs_imu_candidate_a_imucam.yaml"
 
 grep -E 'T_(cam_imu|imu_cam)' \

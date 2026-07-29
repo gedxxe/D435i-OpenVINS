@@ -22,6 +22,8 @@ The current implementation:
 - keeps OpenVINS pinned at v2.7 with ROS disabled;
 - builds only the pinned repository-local librealsense with the reviewed RSUSB
   gyro-sensitivity patch and rejects system-library fallback;
+- separates process/CLI helpers from calibration and estimator-bundle
+  validation without changing the validation contract;
 - requires the selected stream to retain gyro sensitivity 1 and project gyro
   scale 1.0;
 - records stream, serial, gyro sensitivity, gyro scale, timing, calibration,
@@ -69,7 +71,7 @@ Before a commit is considered ready:
 
 ```bash
 git diff --check
-./scripts/verify_selected_runtime.sh
+./scripts/verify_selected_runtime.sh --serial 843212070146
 cmake --preset portable-core
 cmake --build --preset portable-core
 ctest --preset portable-core --output-on-failure
@@ -89,6 +91,7 @@ Also review:
 - every documented Bash block with `bash -n`;
 - all local Markdown links and math delimiters;
 - CLI `--help` output against documented commands;
+- public headers and CMake source registration after structural refactors;
 - the clean pinned OpenVINS submodule and the patched `.deps` build checkout;
 - the final diff for personal paths, generated artifacts, secrets, and
   fabricated measurements.
@@ -110,6 +113,11 @@ The current source and pinned dependency patches passed:
   and
 - replay instrumentation checks whose trajectories remained byte-identical
   before and after adding read-only MSCKF update statistics.
+
+The structural cleanup replayed
+`datasets/vio_rsusb_sensitivity_fix_20260729T1315Z` again. Its trajectory and
+the first 48 state columns were byte-identical to the pre-refactor replay; only
+the measured processing-latency column differed.
 
 The final connected-camera preflight passed with zero errors and zero warnings.
 It confirmed D435i serial `843212070146`, completed the one-second inspector

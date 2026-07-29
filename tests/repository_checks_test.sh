@@ -71,6 +71,21 @@ fi
 bash -n "${repo_dir}/scripts/verify_selected_runtime.sh"
 "${repo_dir}/scripts/verify_selected_runtime.sh" >/dev/null
 
+for runtime_document in \
+  "${repo_dir}/README.md" \
+  "${repo_dir}/docs/operator_runbook.md" \
+  "${repo_dir}/docs/selected_runtime.md"; do
+  grep -Fq \
+    'config/local/d435i-843212070146/selected_runtime/estimator.yaml' \
+    "${runtime_document}"
+  grep -Fq 'config/sensors/realsense_streams_vio_90hz.yaml' \
+    "${runtime_document}"
+  grep -Fq -- '--online-time-offset off' "${runtime_document}"
+  grep -Fq \
+    './scripts/verify_selected_runtime.sh --serial "${D435I_SERIAL}"' \
+    "${runtime_document}"
+done
+
 for markdown_file in \
   "${repo_dir}/README.md" \
   "${repo_dir}/AUDIT_REPORT.md" \
@@ -93,6 +108,53 @@ for markdown_file in \
   fi
 done
 
+for markdown_file in \
+  "${repo_dir}/README.md" \
+  "${repo_dir}/AUDIT_REPORT.md" \
+  "${repo_dir}/CHANGELOG.md" \
+  "${repo_dir}"/docs/*.md \
+  "${repo_dir}/config/estimator/README.md"; do
+  while IFS= read -r reference; do
+    if [[ "${reference}" == href=* || "${reference}" == src=* ]]; then
+      target="${reference#*=\"}"
+      target="${target%\"}"
+    else
+      target="${reference#*](}"
+      target="${target%)}"
+    fi
+    target="${target%%#*}"
+    target="${target%%\\?*}"
+    case "${target}" in
+      "" | http://* | https://* | mailto:*)
+        continue
+        ;;
+    esac
+    if [[ ! -e "$(dirname "${markdown_file}")/${target}" ]]; then
+      echo "Broken local Markdown link in ${markdown_file}: ${target}" >&2
+      exit 1
+    fi
+  done < <(
+    grep -oE \
+      '(\\[[^]]+\\]\\([^)]*\\)|((href|src)=\"[^\"]+\"))' \
+      "${markdown_file}" || true
+  )
+done
+
+mapfile -t active_documentation < <(
+  find "${repo_dir}/docs" -maxdepth 1 -type f -name '*.md' \
+    ! -name 'audit_history.md' -print | sort
+)
+active_documentation+=(
+  "${repo_dir}/README.md"
+  "${repo_dir}/AUDIT_REPORT.md"
+  "${repo_dir}/config/estimator/README.md"
+)
+if grep -n -E 'README(\\.md)? (Step|section)' \
+     "${active_documentation[@]}"; then
+  echo "Active documentation contains a stale numbered README reference." >&2
+  exit 1
+fi
+
 if awk '
     /^```/ {
       in_fence = !in_fence
@@ -109,6 +171,25 @@ if awk '
   :
 else
   echo "Markdown contains unsupported inline \\\\( ... \\\\) math delimiters." >&2
+  exit 1
+fi
+
+if awk '
+    /^```/ {
+      in_fence = !in_fence
+      next
+    }
+    !in_fence && /\$\$/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0
+      invalid = 1
+    }
+    END { exit invalid }
+  ' "${repo_dir}/README.md" "${repo_dir}/AUDIT_REPORT.md" \
+    "${repo_dir}/CHANGELOG.md" "${repo_dir}"/docs/*.md \
+    "${repo_dir}/config/estimator/README.md"; then
+  :
+else
+  echo "Markdown contains raw display-math dollar delimiters." >&2
   exit 1
 fi
 

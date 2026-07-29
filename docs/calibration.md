@@ -323,8 +323,9 @@ reviewed visually gated one-second stop recovery documented in
 
 The runtime remains ROS-free. Kalibr requires ROS1, so conversion and
 optimization occur in a separate Ubuntu 20.04 environment: a supported
-machine/VM or the pinned Docker workflow in the root README. Repository scripts
-do not install Docker or ROS on the Ubuntu 24.04 host.
+machine/VM or the pinned Docker workflow in the
+[operator runbook](operator_runbook.md). Repository scripts do not install
+Docker or ROS on the Ubuntu 24.04 host.
 
 The Docker workflow uses `docker/calibration.Dockerfile` to extend the pinned
 Kalibr image with the pinned Allan source. It does not rely on mutable

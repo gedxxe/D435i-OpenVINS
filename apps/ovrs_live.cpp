@@ -1,5 +1,6 @@
 #include "ovrs/app_support.hpp"
 #include "ovrs/bounded_queue.hpp"
+#include "ovrs/calibration_validation.hpp"
 #include "ovrs/config.hpp"
 #include "ovrs/imu_synchronizer.hpp"
 #include "ovrs/live_viewer.hpp"

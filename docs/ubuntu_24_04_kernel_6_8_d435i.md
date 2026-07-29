@@ -404,7 +404,8 @@ For a longer confirmation:
   |& tee output/kernel-6.8-migration/inspect-10s-6.8.txt
 ```
 
-Continue to README Step 4 only when:
+Continue to the
+[manual acceptance checklist](manual_test.md) only when:
 
 - stereo, gyro, and accelerometer rates are all nonzero;
 - malformed frames are zero;

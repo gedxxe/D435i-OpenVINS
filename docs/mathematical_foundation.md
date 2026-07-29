@@ -4,9 +4,9 @@ This document summarizes the mathematical contract implemented by this
 repository. It is an orientation guide, not a replacement for the complete
 [OpenVINS derivations](https://docs.openvins.com/pages.html).
 
-GitHub renders inline expressions between single dollar delimiters and display
-expressions between double dollar delimiters. The notation here deliberately
-uses those delimiters so symbols render both inside sentences and as equations.
+GitHub renders inline expressions between single dollar delimiters. Display
+equations use fenced `math` blocks, which avoids exposing raw delimiter
+markers when Markdown is viewed on GitHub.
 
 ## IMU measurement and propagation
 
@@ -14,27 +14,27 @@ Let ${}^{G}\!R_I$ rotate an IMU-frame vector into the global frame. With
 gyroscope bias $b_g$, accelerometer bias $b_a$, white measurement noises
 $n_g,n_a$, and global gravity ${}^{G}\!g$, the basic calibrated IMU model is
 
-$$
+```math
 \omega_m = \omega + b_g + n_g,
 \qquad
 a_m = {}^{I}\!R_G\left({}^{G}\!a_I-{}^{G}\!g\right)+b_a+n_a.
-$$
+```
 
 The continuous navigation state evolves as
 
-$$
+```math
 \dot{{}^{G}\!R_I}
   = {}^{G}\!R_I[\omega_m-b_g-n_g]_\times,
 \qquad
 \dot{{}^{G}\!p_I} = {}^{G}\!v_I,
-$$
+```
 
-$$
+```math
 \dot{{}^{G}\!v_I}
   = {}^{G}\!R_I(a_m-b_a-n_a)+{}^{G}\!g,
 \qquad
 \dot b_g=n_{wg},\quad \dot b_a=n_{wa}.
-$$
+```
 
 Here $[\cdot]_\times$ is the skew-symmetric cross-product matrix, while
 $n_{wg}$ and $n_{wa}$ drive bias random walks. The runtime uses OpenVINS RK4
@@ -54,27 +54,27 @@ Librealsense supplies motion values in rad/s and m/s². The generic
 `StreamConfig` preserves SDK gyro values with scale `1.0`; the selected serial
 explicitly uses the post-calibration factor $s_g=1.0$:
 
-$$
+```math
 \omega_{\mathrm{used}}=s_g\,\omega_{\mathrm{SDK}}.
-$$
+```
 
 The accelerometer measurement is rotated using the device-reported
 accel-to-gyro rotation:
 
-$$
+```math
 a_{\mathrm{gyro}}^{\text{sample}}
 =R_{\mathrm{gyro}\leftarrow\mathrm{accel}}\,
  a_{\mathrm{accel}}^{\text{sample}}.
-$$
+```
 
 Because the configured accelerometer and gyro rates differ, acceleration at a
 gyro timestamp $t_g\in[t_{a0},t_{a1}]$ is
 
-$$
+```math
 \alpha=\frac{t_g-t_{a0}}{t_{a1}-t_{a0}},
 \qquad
 a(t_g)=(1-\alpha)a(t_{a0})+\alpha a(t_{a1}).
-$$
+```
 
 Raw device timestamps remain beside normalized seconds so synchronization can
 be audited. The runtime requires the configured motion profiles rather than
@@ -85,15 +85,15 @@ silently substituting the nearest available rates.
 For a rectified pinhole stereo pair with focal length $f_x$, baseline $b$, and
 disparity $d=u_L-u_R$, approximate depth is
 
-$$
+```math
 Z \approx \frac{f_x b}{d}.
-$$
+```
 
 First-order uncertainty grows approximately as
 
-$$
+```math
 \sigma_Z \approx \frac{Z^2}{f_x b}\,\sigma_d.
-$$
+```
 
 The D435i's short stereo baseline means distant, low-disparity features have
 weak depth conditioning. Fast blur, repeated texture, poor exposure, bad
@@ -103,11 +103,11 @@ when the IMU stream is numerically smooth.
 The runtime key `T_imu_cam` maps a homogeneous point from camera coordinates
 into IMU coordinates:
 
-$$
+```math
 \begin{bmatrix}p_I\\1\end{bmatrix}
 =T_{\mathrm{imu}\leftarrow\mathrm{cam}}
 \begin{bmatrix}p_C\\1\end{bmatrix}.
-$$
+```
 
 Kalibr emits the opposite transform direction. Its result is inverted only at
 the reviewed promotion boundary.
@@ -116,31 +116,31 @@ the reviewed promotion boundary.
 
 For a tracked feature, the linearized pixel residual over its observations is
 
-$$
+```math
 r \approx H_x\tilde x + H_f\tilde p_f+n.
-$$
+```
 
 MSCKF does not retain that feature as a permanent map landmark. It finds a
 left-nullspace basis $N$ satisfying $N^\mathsf{T}H_f=0$, then projects
 
-$$
+```math
 r_o=N^\mathsf{T}r
 \approx N^\mathsf{T}H_x\tilde x+N^\mathsf{T}n.
-$$
+```
 
 The resulting constraint updates the navigation state while eliminating the
 unknown feature error. For $H=N^\mathsf{T}H_x$ and projected noise covariance
 $R$, the EKF update follows
 
-$$
+```math
 S=HPH^\mathsf{T}+R,\qquad
 K=PH^\mathsf{T}S^{-1},
-$$
+```
 
-$$
+```math
 \delta x=Kr_o,\qquad
 P^+=(I-KH)P^-.
-$$
+```
 
 The project keeps OpenVINS First-Estimate Jacobians enabled to preserve its
 intended observability and consistency behavior.
@@ -150,10 +150,10 @@ intended observability and consistency behavior.
 The reviewed OpenVINS patch adds a velocity observation only after inertial and
 visual stationarity agree. For a zero-velocity residual,
 
-$$
+```math
 r_v=0-\hat v_I,\qquad H_v=
 \begin{bmatrix}0&0&I_3&0&0\end{bmatrix}.
-$$
+```
 
 Low feature disparity is an additional gate. Missing visual tracks mean
 unknown, not stationary. The serial-specific selected runtime permits

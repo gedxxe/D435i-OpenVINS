@@ -82,6 +82,7 @@ endif()
 
 add_library(ovrs_core
   src/app_support.cpp
+  src/calibration_validation.cpp
   src/capture_mode.cpp
   src/config.cpp
   src/imu_synchronizer.cpp

@@ -107,6 +107,12 @@ dispatcher worker while periodic diagnostics originate on the main thread.
 `ovrs_viewer` owns OpenCV HighGUI rendering. Application and log interfaces
 use project-owned structs.
 
+Within `ovrs_core`, `app_support` contains only process lifecycle, file, CLI,
+and version helpers. Calibration identity, dependency-path checks, camera
+geometry, sensor-policy provenance, and estimator-bundle validation live in
+`calibration_validation`. Keeping these concerns separate prevents ordinary
+CLI code from becoming the owner of calibration semantics.
+
 OpenVINS is built from its `ov_msckf` directory with `ENABLE_ROS=OFF` and
 `ENABLE_ARUCO_TAGS=OFF`; `catkin` and `ament_cmake` package discovery are
 disabled as well. Ubuntu 24.04 uses repository-local Ceres 2.1.0 because

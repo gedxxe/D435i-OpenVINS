@@ -231,7 +231,6 @@ third_party/open_vins pinned OpenVINS submodule
 
 ## Scope and safety
 
-- Do not rename `T_cam_imu` to `T_imu_cam` without inverting the transform.
 - Do not promote a calibration by changing only its state label.
 - Do not write calibration or firmware to the camera EEPROM from this project.
 - Do not mix recordings from different cameras or stream settings.
@@ -241,6 +240,18 @@ third_party/open_vins pinned OpenVINS submodule
 This repository does not include ROS, ROS2, MAVLink, ArduPilot, Pixhawk, GPS,
 mapping, loop closure, navigation, depth processing, RGB processing,
 simulation, or flight control.
+
+## A small way to help
+
+<p align="center">
+  <a href="https://github.com/gedxxe/D435i-OpenVINS">
+    <img src="docs/assets/community.svg" alt="If this project is useful, consider starring the repository, sharing a reproducible run, or opening an issue." width="100%">
+  </a>
+</p>
+
+If this project saves you some debugging time, consider giving it a star. It
+helps other D435i and OpenVINS users find the repository. Reproducible issue
+reports and test notes are welcome too.
 
 ## Author
 

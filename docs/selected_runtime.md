@@ -418,7 +418,7 @@ Run this whole block from the repository root in a graphical Ubuntu session:
   STREAM_CONFIG="config/sensors/realsense_streams_vio_90hz.yaml"
   LIVE_RUN="runs/live_diagnostic_$(date -u +%Y%m%dT%H%M%SZ)"
 
-  ./scripts/verify_selected_runtime.sh
+  ./scripts/verify_selected_runtime.sh --serial "${D435I_SERIAL}"
 
   ./scripts/preflight_ubuntu.sh --require-build
   ./scripts/preflight_ubuntu.sh \
