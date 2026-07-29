@@ -13,6 +13,7 @@ from typing import Any
 
 from calibration_common import (
     CalibrationError,
+    export_global_time_enabled,
     finite_float,
     sha256_file,
     simple_yaml_map,
@@ -60,19 +61,20 @@ def parser() -> argparse.ArgumentParser:
         "--imu-camera-export-manifest", required=True, type=Path
     )
     result.add_argument(
-        "--imu-intrinsics-yaml",
+        "--kalibr-intrinsics-yaml",
         type=Path,
         help=(
-            "reviewed multi-orientation IMU intrinsic YAML containing imu0 "
-            "Tw, Ta, R_IMUtoGYRO, R_IMUtoACC, and Tg matrices"
+            "raw imu-*.yaml emitted by kalibr_calibrate_imu_camera with "
+            "--imu-models scale-misalignment"
         ),
     )
     result.add_argument(
-        "--acknowledge-multi-orientation-intrinsics-reviewed",
+        "--acknowledge-kalibr-scale-misalignment-reviewed",
         action="store_true",
         help=(
-            "required with --imu-intrinsics-yaml after reviewing its method, "
-            "axis convention, motion-correction policy, and fit residuals"
+            "required with --kalibr-intrinsics-yaml after reviewing motion "
+            "excitation, repeatability, residual/bias plots, physical "
+            "plausibility, and the documented Kalibr-to-OpenVINS mapping"
         ),
     )
     result.add_argument("--output-dir", required=True, type=Path)
@@ -114,6 +116,120 @@ def positive_noise_values(source: dict[str, Any]) -> dict[str, float]:
     return values
 
 
+def matrix_multiply(
+    left: list[list[float]], right: list[list[float]]
+) -> list[list[float]]:
+    return [
+        [
+            sum(left[row][index] * right[index][column] for index in range(3))
+            for column in range(3)
+        ]
+        for row in range(3)
+    ]
+
+
+def validate_lower_triangular(
+    matrix: list[list[float]], field: str, tolerance: float = 1e-12
+) -> None:
+    for row, column in ((0, 1), (0, 2), (1, 2)):
+        if abs(matrix[row][column]) > tolerance:
+            raise CalibrationError(
+                f"{field} must use Kalibr's lower-triangular model"
+            )
+    if any(matrix[index][index] <= 0.0 for index in range(3)):
+        raise CalibrationError(f"{field} diagonal entries must be positive")
+
+
+def require_matching_noise(
+    kalibr_source: dict[str, Any], noise: dict[str, float]
+) -> None:
+    for key, expected in noise.items():
+        actual = finite_float(kalibr_source.get(key), f"imu0.{key}")
+        tolerance = max(abs(expected), 1.0) * 1e-12
+        if abs(actual - expected) > tolerance:
+            raise CalibrationError(
+                f"Kalibr output {key} {actual} does not match Allan input "
+                f"{expected}"
+            )
+
+
+def convert_kalibr_intrinsics(
+    path: Path,
+    noise: dict[str, float],
+    update_rate: int,
+) -> tuple[
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+]:
+    document = load_yaml(path)
+    source = document.get("imu0")
+    if not isinstance(source, dict):
+        raise CalibrationError("Kalibr intrinsic YAML must contain imu0")
+    if source.get("model") != "scale-misalignment":
+        raise CalibrationError(
+            "Kalibr intrinsic YAML model must be scale-misalignment"
+        )
+    if source.get("rostopic") != "/imu0":
+        raise CalibrationError("Kalibr intrinsic YAML rostopic must be /imu0")
+    rate = finite_float(source.get("update_rate"), "imu0.update_rate")
+    if rate != float(update_rate):
+        raise CalibrationError(
+            f"Kalibr intrinsic YAML update_rate {rate} does not match "
+            f"capture gyro rate {update_rate}"
+        )
+    require_matching_noise(source, noise)
+
+    accelerometers = source.get("accelerometers")
+    gyroscopes = source.get("gyroscopes")
+    if not isinstance(accelerometers, dict):
+        raise CalibrationError(
+            "Kalibr intrinsic YAML imu0.accelerometers must be a mapping"
+        )
+    if not isinstance(gyroscopes, dict):
+        raise CalibrationError(
+            "Kalibr intrinsic YAML imu0.gyroscopes must be a mapping"
+        )
+    tw = numeric_matrix(gyroscopes.get("M"), 3, 3, "imu0.gyroscopes.M")
+    ta = numeric_matrix(
+        accelerometers.get("M"), 3, 3, "imu0.accelerometers.M"
+    )
+    gyro_rotation = numeric_matrix(
+        gyroscopes.get("C_gyro_i"),
+        3,
+        3,
+        "imu0.gyroscopes.C_gyro_i",
+    )
+    gravity_sensitivity = numeric_matrix(
+        gyroscopes.get("A"), 3, 3, "imu0.gyroscopes.A"
+    )
+    validate_lower_triangular(tw, "imu0.gyroscopes.M")
+    validate_lower_triangular(ta, "imu0.accelerometers.M")
+    validate_rotation(
+        gyro_rotation, "imu0.gyroscopes.C_gyro_i", 1e-6
+    )
+    if abs(determinant3(tw)) <= 1e-9:
+        raise CalibrationError("imu0.gyroscopes.M must be nonsingular")
+    if abs(determinant3(ta)) <= 1e-9:
+        raise CalibrationError("imu0.accelerometers.M must be nonsingular")
+
+    # Kalibr predicts:
+    #   wm = M_w * C_gyro_i * w_i + A * C_gyro_i * a_i + bias
+    # OpenVINS v2.7 removes Tg*a_i before applying inverse(M_w) and
+    # transpose(C_gyro_i). Therefore Tg must be A*C_gyro_i, not a blind
+    # rename of A. The accelerometer defines Kalibr's inertial frame.
+    tg = matrix_multiply(gravity_sensitivity, gyro_rotation)
+    identity3 = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+    return tw, gyro_rotation, ta, identity3, tg, gravity_sensitivity
+
+
 def main() -> int:
     args = parser().parse_args()
     output: Path | None = None
@@ -124,6 +240,17 @@ def main() -> int:
         imucam_manifest = validate_manifest(
             args.imu_camera_export_manifest, "imu-camera-calibration"
         )
+        allan_global_time = export_global_time_enabled(
+            args.allan_export_manifest, allan_manifest
+        )
+        imucam_global_time = export_global_time_enabled(
+            args.imu_camera_export_manifest, imucam_manifest
+        )
+        if allan_global_time != imucam_global_time:
+            raise CalibrationError(
+                "Allan and IMU-camera exports disagree on timestamp policy"
+            )
+        global_time_enabled = allan_global_time
         for key in (
             "calibrated_serial",
             "gyro_rate_hz",
@@ -161,13 +288,13 @@ def main() -> int:
         motion_correction_active = (
             allan_manifest.get("motion_correction_active") == "true"
         )
-        if bool(args.imu_intrinsics_yaml) != bool(
-            args.acknowledge_multi_orientation_intrinsics_reviewed
+        if bool(args.kalibr_intrinsics_yaml) != bool(
+            args.acknowledge_kalibr_scale_misalignment_reviewed
         ):
             raise CalibrationError(
-                "--imu-intrinsics-yaml and "
-                "--acknowledge-multi-orientation-intrinsics-reviewed must be "
-                "supplied together"
+                "--kalibr-intrinsics-yaml and "
+                "--acknowledge-kalibr-scale-misalignment-reviewed must be "
+                "supplied together after manual review"
             )
 
         source = allan_source(load_yaml(args.allan_yaml))
@@ -202,61 +329,36 @@ def main() -> int:
         intrinsic_status = (
             "IDENTITY_ASSUMPTION_REQUIRES_MULTI_ORIENTATION_REVIEW"
         )
+        intrinsic_method = "IDENTITY_PLACEHOLDER"
+        intrinsic_mapping = "none"
         intrinsic_source_sha256 = "none"
+        tg_policy = "zero-g-sensitivity-not-estimated"
         tw = identity3
         gyro_rotation = identity3
         ta = identity3
         accel_rotation = identity3
         tg = zero3
-        if args.imu_intrinsics_yaml:
-            intrinsic_document = load_yaml(args.imu_intrinsics_yaml)
-            intrinsic_source = intrinsic_document.get(
-                "imu0", intrinsic_document
+        kalibr_gravity_sensitivity = zero3
+        if args.kalibr_intrinsics_yaml:
+            (
+                tw,
+                gyro_rotation,
+                ta,
+                accel_rotation,
+                tg,
+                kalibr_gravity_sensitivity,
+            ) = convert_kalibr_intrinsics(
+                args.kalibr_intrinsics_yaml,
+                noise,
+                update_rate,
             )
-            if not isinstance(intrinsic_source, dict):
-                raise CalibrationError(
-                    "IMU intrinsic YAML root/imu0 must be a mapping"
-                )
-            intrinsic_motion_policy = intrinsic_source.get(
-                "realsense_motion_correction_enabled"
-            )
-            if not isinstance(intrinsic_motion_policy, bool):
-                raise CalibrationError(
-                    "IMU intrinsic YAML must declare boolean "
-                    "realsense_motion_correction_enabled"
-                )
-            if intrinsic_motion_policy != motion_correction_active:
-                raise CalibrationError(
-                    "IMU intrinsic YAML motion-correction policy does not "
-                    "match the captures"
-                )
-            tw = numeric_matrix(intrinsic_source.get("Tw"), 3, 3, "imu0.Tw")
-            gyro_rotation = numeric_matrix(
-                intrinsic_source.get("R_IMUtoGYRO"),
-                3,
-                3,
-                "imu0.R_IMUtoGYRO",
-            )
-            ta = numeric_matrix(intrinsic_source.get("Ta"), 3, 3, "imu0.Ta")
-            accel_rotation = numeric_matrix(
-                intrinsic_source.get("R_IMUtoACC"),
-                3,
-                3,
-                "imu0.R_IMUtoACC",
-            )
-            tg = numeric_matrix(intrinsic_source.get("Tg"), 3, 3, "imu0.Tg")
-            validate_rotation(
-                gyro_rotation, "imu0.R_IMUtoGYRO", 1e-6
-            )
-            validate_rotation(
-                accel_rotation, "imu0.R_IMUtoACC", 1e-6
-            )
-            if abs(determinant3(tw)) <= 1e-9:
-                raise CalibrationError("imu0.Tw must be nonsingular")
-            if abs(determinant3(ta)) <= 1e-9:
-                raise CalibrationError("imu0.Ta must be nonsingular")
             intrinsic_status = "MULTI_ORIENTATION_REVIEWED"
-            intrinsic_source_sha256 = sha256_file(args.imu_intrinsics_yaml)
+            intrinsic_method = "KALIBR_SCALE_MISALIGNMENT"
+            intrinsic_mapping = "ovrs-kalibr-openvins-imu-v1"
+            tg_policy = "kalibr-A-times-C_gyro_i"
+            intrinsic_source_sha256 = sha256_file(
+                args.kalibr_intrinsics_yaml
+            )
 
         openvins_document: dict[str, Any] = {
             "calibration_state": "UNVERIFIED_KALIBR_INPUT",
@@ -265,8 +367,12 @@ def main() -> int:
                 "realsense_motion_correction_enabled": (
                     motion_correction_active
                 ),
+                "realsense_global_time_enabled": global_time_enabled,
                 "allan_sample_status": allan_sample_status,
                 "imu_intrinsic_status": intrinsic_status,
+                "imu_intrinsic_method": intrinsic_method,
+                "imu_intrinsic_mapping": intrinsic_mapping,
+                "imu_intrinsic_source_sha256": intrinsic_source_sha256,
                 "T_i_b": identity4,
                 **noise,
                 "time_offset": 0.0,
@@ -277,6 +383,7 @@ def main() -> int:
                 "Ta": ta,
                 "R_IMUtoACC": accel_rotation,
                 "Tg": tg,
+                "kalibr_gyroscope_A": kalibr_gravity_sensitivity,
             },
         }
 
@@ -308,12 +415,16 @@ def main() -> int:
                 f"update_rate: {update_rate}\n"
                 f"motion_correction_active: "
                 f"{str(motion_correction_active).lower()}\n"
+                f"global_time_enabled: "
+                f"{str(global_time_enabled).lower()}\n"
                 f"allan_recording_duration_s: {allan_duration_s:.17g}\n"
                 f'allan_sample_status: "{allan_sample_status}"\n'
                 "imu_intrinsic_policy: "
                 f'"{intrinsic_status}"\n'
+                f'imu_intrinsic_method: "{intrinsic_method}"\n'
+                f'imu_intrinsic_mapping: "{intrinsic_mapping}"\n'
                 f'imu_intrinsics_source_sha256: "{intrinsic_source_sha256}"\n'
-                'Tg_policy: "zero-g-sensitivity-not-estimated"\n'
+                f'Tg_policy: "{tg_policy}"\n'
                 f'allan_yaml_sha256: "{sha256_file(args.allan_yaml)}"\n'
                 "allan_export_manifest_sha256: "
                 f'"{sha256_file(args.allan_export_manifest)}"\n'

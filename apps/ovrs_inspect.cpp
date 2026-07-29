@@ -1,6 +1,7 @@
 #include "ovrs/app_support.hpp"
 #include "ovrs/config.hpp"
 #include "ovrs/realsense_source.hpp"
+#include "ovrs/yaml_utils.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -25,9 +26,12 @@ void help() {
          "                    [--width PIXELS --height PIXELS "
          "--camera-fps HZ]\n"
          "                    [--gyro-fps HZ --accel-fps HZ]\n"
+         "                    [--gyro-sensitivity 0..4]\n"
+         "                    [--gyro-scale-factor FACTOR]\n"
          "                    [--emitter on|off] "
          "[--auto-exposure on|off]\n"
          "                    [--motion-correction on|off]\n"
+         "                    [--global-time on|off]\n"
          "                    [--imu-queue COUNT --stereo-queue COUNT]\n"
          "                    [--stereo-tolerance-ms MILLISECONDS]\n"
          "                    [--export REPORT.yaml]\n"

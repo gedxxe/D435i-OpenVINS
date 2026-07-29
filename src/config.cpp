@@ -69,6 +69,14 @@ std::vector<std::string> validate(const StreamConfig &config) {
       config.accel_fps <= 0) {
     errors.emplace_back("stream rates must be positive");
   }
+  if (config.gyro_sensitivity < 0 || config.gyro_sensitivity > 4) {
+    errors.emplace_back("gyro sensitivity must be an index in [0,4]");
+  }
+  if (!std::isfinite(config.gyro_scale_factor) ||
+      config.gyro_scale_factor <= 0.0 ||
+      config.gyro_scale_factor > 100.0) {
+    errors.emplace_back("gyro scale factor must be finite and in (0,100]");
+  }
   if (config.imu_queue_size < 2 || config.stereo_queue_size < 1 ||
       config.imu_queue_size > 1000000 ||
       config.stereo_queue_size > 1000000) {
@@ -97,8 +105,9 @@ bool apply_stream_config_yaml(const std::string &yaml, StreamConfig *config,
   try {
     for (const char *key :
          {"width", "height", "camera_fps", "gyro_fps",
+          "gyro_sensitivity", "gyro_scale_factor",
           "accelerometer_fps", "emitter_enabled", "auto_exposure",
-          "motion_correction_enabled",
+          "motion_correction_enabled", "global_time_enabled",
           "imu_queue_size", "stereo_queue_size", "stereo_tolerance_ms",
           "serial"}) {
       if (simple_yaml_key_count(yaml, key) > 1) {
@@ -136,11 +145,18 @@ bool apply_stream_config_yaml(const std::string &yaml, StreamConfig *config,
     apply_int("height", &config->height);
     apply_int("camera_fps", &config->camera_fps);
     apply_int("gyro_fps", &config->gyro_fps);
+    apply_int("gyro_sensitivity", &config->gyro_sensitivity);
+    const auto gyro_scale = simple_yaml_scalar(yaml, "gyro_scale_factor");
+    if (!gyro_scale.empty()) {
+      config->gyro_scale_factor =
+          parse_double_strict(gyro_scale, "gyro_scale_factor");
+    }
     apply_int("accelerometer_fps", &config->accel_fps);
     apply_bool("emitter_enabled", &config->emitter_enabled);
     apply_bool("auto_exposure", &config->auto_exposure);
     apply_bool("motion_correction_enabled",
                &config->motion_correction_enabled);
+    apply_bool("global_time_enabled", &config->global_time_enabled);
     apply_size("imu_queue_size", &config->imu_queue_size);
     apply_size("stereo_queue_size", &config->stereo_queue_size);
     const auto tolerance = simple_yaml_scalar(yaml, "stereo_tolerance_ms");
@@ -188,10 +204,13 @@ std::vector<std::string> stream_cli_value_options() {
           "--height",
           "--camera-fps",
           "--gyro-fps",
+          "--gyro-sensitivity",
+          "--gyro-scale-factor",
           "--accel-fps",
           "--emitter",
           "--auto-exposure",
           "--motion-correction",
+          "--global-time",
           "--imu-queue",
           "--stereo-queue",
           "--stereo-tolerance-ms"};
@@ -221,6 +240,14 @@ bool apply_stream_config_cli(int argc, char **argv, StreamConfig *config,
     if (const auto value = cli_value(argc, argv, "--gyro-fps")) {
       config->gyro_fps = parse_int_strict(*value, "--gyro-fps");
     }
+    if (const auto value = cli_value(argc, argv, "--gyro-sensitivity")) {
+      config->gyro_sensitivity =
+          parse_int_strict(*value, "--gyro-sensitivity");
+    }
+    if (const auto value = cli_value(argc, argv, "--gyro-scale-factor")) {
+      config->gyro_scale_factor =
+          parse_double_strict(*value, "--gyro-scale-factor");
+    }
     if (const auto value = cli_value(argc, argv, "--accel-fps")) {
       config->accel_fps = parse_int_strict(*value, "--accel-fps");
     }
@@ -241,6 +268,12 @@ bool apply_stream_config_cli(int argc, char **argv, StreamConfig *config,
         throw std::invalid_argument("--motion-correction must be on or off");
       }
       config->motion_correction_enabled = *value == "on";
+    }
+    if (const auto value = cli_value(argc, argv, "--global-time")) {
+      if (*value != "on" && *value != "off") {
+        throw std::invalid_argument("--global-time must be on or off");
+      }
+      config->global_time_enabled = *value == "on";
     }
     if (const auto value = cli_value(argc, argv, "--imu-queue")) {
       config->imu_queue_size = parse_size_exact(*value, "--imu-queue");
@@ -279,6 +312,8 @@ std::string stream_config_yaml(const StreamConfig &config) {
          << "height: " << config.height << '\n'
          << "camera_fps: " << config.camera_fps << '\n'
          << "gyro_fps: " << config.gyro_fps << '\n'
+         << "gyro_sensitivity: " << config.gyro_sensitivity << '\n'
+         << "gyro_scale_factor: " << config.gyro_scale_factor << '\n'
          << "accelerometer_fps: " << config.accel_fps << '\n'
          << "emitter_enabled: "
          << (config.emitter_enabled ? "true" : "false") << '\n'
@@ -286,6 +321,8 @@ std::string stream_config_yaml(const StreamConfig &config) {
          << (config.auto_exposure ? "true" : "false") << '\n'
          << "motion_correction_enabled: "
          << (config.motion_correction_enabled ? "true" : "false") << '\n'
+         << "global_time_enabled: "
+         << (config.global_time_enabled ? "true" : "false") << '\n'
          << "imu_queue_size: " << config.imu_queue_size << '\n'
          << "stereo_queue_size: " << config.stereo_queue_size << '\n'
          << "stereo_tolerance_ms: " << config.stereo_tolerance_ms << '\n';

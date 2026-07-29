@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620" role="img" aria-labelledby="title desc">
+  <title id="title">D435i OpenVINS live viewer guide</title>
+  <desc id="desc">A simple guide to the stereo infrared preview, fixed global trajectory view, tracking status, and saved run data.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.55" stop-color="#102d46"/>
+      <stop offset="1" stop-color="#0b1828"/>
+    </linearGradient>
+    <linearGradient id="window" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a3448"/>
+      <stop offset="1" stop-color="#0b1926"/>
+    </linearGradient>
+    <linearGradient id="path" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#35d0ba"/>
+      <stop offset="1" stop-color="#66a8ff"/>
+    </linearGradient>
+    <clipPath id="left-image">
+      <rect x="66" y="142" width="247" height="188" rx="8"/>
+    </clipPath>
+    <clipPath id="right-image">
+      <rect x="325" y="142" width="247" height="188" rx="8"/>
+    </clipPath>
+    <style>
+      .title { fill: #f4f8fb; font-family: Arial, sans-serif; font-size: 27px; font-weight: 700; }
+      .heading { fill: #f2f7fb; font-family: Arial, sans-serif; font-size: 19px; font-weight: 700; }
+      .body { fill: #c7d9e6; font-family: Arial, sans-serif; font-size: 15px; }
+      .small { fill: #9db5c8; font-family: Arial, sans-serif; font-size: 13px; }
+      .card { fill: #10283a; stroke: #365d76; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="620" rx="28" fill="url(#background)"/>
+  <g opacity="0.1" stroke="#8dc8ff" stroke-width="1">
+    <path d="M0 78H1280M0 156H1280M0 234H1280M0 312H1280M0 390H1280M0 468H1280M0 546H1280"/>
+    <path d="M80 0V620M160 0V620M240 0V620M320 0V620M400 0V620M480 0V620M560 0V620M640 0V620M720 0V620M800 0V620M880 0V620M960 0V620M1040 0V620M1120 0V620M1200 0V620"/>
+  </g>
+
+  <text x="48" y="49" class="title">Live view: images on the left, motion on the right</text>
+  <text x="48" y="76" class="body">The two windows can be resized independently. The image shape and the global frame stay correct.</text>
+
+  <g>
+    <rect x="42" y="101" width="554" height="310" rx="16" fill="url(#window)" stroke="#456d89" stroke-width="2"/>
+    <circle cx="66" cy="121" r="5" fill="#ff6b6b"/>
+    <circle cx="84" cy="121" r="5" fill="#e9b949"/>
+    <circle cx="102" cy="121" r="5" fill="#62d68b"/>
+    <text x="319" y="126" text-anchor="middle" class="heading">Stereo infrared preview</text>
+
+    <rect x="66" y="142" width="247" height="188" rx="8" fill="#17222b"/>
+    <rect x="325" y="142" width="247" height="188" rx="8" fill="#17222b"/>
+
+    <g clip-path="url(#left-image)">
+      <rect x="66" y="142" width="247" height="188" fill="#303b43"/>
+      <path d="M65 276L139 219L192 247L252 184L314 238V332H65Z" fill="#65727a"/>
+      <rect x="102" y="176" width="58" height="52" fill="#8f999e"/>
+      <path d="M102 176L131 155L160 176" fill="#b5bdc1"/>
+      <rect x="238" y="206" width="43" height="72" fill="#919a9e"/>
+      <g fill="#35d0ba">
+        <circle cx="112" cy="182" r="3"/><circle cx="151" cy="219" r="3"/>
+        <circle cx="204" cy="240" r="3"/><circle cx="259" cy="211" r="3"/>
+        <circle cx="282" cy="254" r="3"/><circle cx="173" cy="262" r="3"/>
+        <circle cx="94" cy="287" r="3"/><circle cx="224" cy="190" r="3"/>
+      </g>
+    </g>
+
+    <g clip-path="url(#right-image)">
+      <rect x="325" y="142" width="247" height="188" fill="#303b43"/>
+      <path d="M324 276L396 219L450 247L509 184L573 238V332H324Z" fill="#65727a"/>
+      <rect x="361" y="176" width="58" height="52" fill="#8f999e"/>
+      <path d="M361 176L390 155L419 176" fill="#b5bdc1"/>
+      <rect x="497" y="206" width="43" height="72" fill="#919a9e"/>
+      <g fill="#66a8ff">
+        <circle cx="371" cy="182" r="3"/><circle cx="410" cy="219" r="3"/>
+        <circle cx="463" cy="240" r="3"/><circle cx="518" cy="211" r="3"/>
+        <circle cx="541" cy="254" r="3"/><circle cx="432" cy="262" r="3"/>
+        <circle cx="353" cy="287" r="3"/><circle cx="483" cy="190" r="3"/>
+      </g>
+    </g>
+
+    <text x="189" y="352" text-anchor="middle" class="body">IR1 · camera 0</text>
+    <text x="449" y="352" text-anchor="middle" class="body">IR2 · camera 1</text>
+    <rect x="147" y="373" width="344" height="24" rx="12" fill="#17374b"/>
+    <text x="319" y="390" text-anchor="middle" class="small">Aspect ratio is kept when the window is resized</text>
+  </g>
+
+  <g>
+    <rect x="620" y="101" width="618" height="310" rx="16" fill="url(#window)" stroke="#456d89" stroke-width="2"/>
+    <circle cx="644" cy="121" r="5" fill="#ff6b6b"/>
+    <circle cx="662" cy="121" r="5" fill="#e9b949"/>
+    <circle cx="680" cy="121" r="5" fill="#62d68b"/>
+    <text x="929" y="126" text-anchor="middle" class="heading">Global XYZ trajectory</text>
+
+    <g opacity="0.35" stroke="#6f8a9d" stroke-width="1">
+      <path d="M669 331H1188M669 291H1188M669 251H1188M669 211H1188M669 171H1188"/>
+      <path d="M709 151V351M769 151V351M829 151V351M889 151V351M949 151V351M1009 151V351M1069 151V351M1129 151V351"/>
+    </g>
+
+    <g transform="translate(716 321)" stroke-linecap="round">
+      <path d="M0 0H61" stroke="#ff6b6b" stroke-width="4"/>
+      <path d="M0 0V-63" stroke="#62d68b" stroke-width="4"/>
+      <path d="M0 0L38 -37" stroke="#66a8ff" stroke-width="4"/>
+      <text x="68" y="5" fill="#ff8d8d" font-family="Arial, sans-serif" font-size="14" font-weight="700">X</text>
+      <text x="-5" y="-72" fill="#79e59d" font-family="Arial, sans-serif" font-size="14" font-weight="700">Y</text>
+      <text x="45" y="-42" fill="#8fc0ff" font-family="Arial, sans-serif" font-size="14" font-weight="700">Z</text>
+    </g>
+
+    <path d="M716 321C770 297 808 329 850 279S931 248 967 214S1041 245 1080 195S1144 194 1174 163" fill="none" stroke="url(#path)" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="716" cy="321" r="7" fill="#35d0ba"/>
+    <circle cx="1061" cy="215" r="12" fill="#0b1926" stroke="#f4f8fb" stroke-width="2"/>
+    <path d="M1055 215L1068 207V223Z" fill="#e9b949"/>
+    <text x="1061" y="242" text-anchor="middle" class="small">estimated camera pose</text>
+
+    <rect x="757" y="373" width="344" height="24" rx="12" fill="#17374b"/>
+    <text x="929" y="390" text-anchor="middle" class="small">The grid and global axes do not follow the camera</text>
+  </g>
+
+  <g>
+    <rect x="42" y="437" width="280" height="118" rx="15" class="card"/>
+    <circle cx="72" cy="469" r="10" fill="#35d0ba"/>
+    <text x="94" y="476" class="heading">Stereo input</text>
+    <text x="67" y="510" class="body">Y8 pair · 848×480 · 90 Hz</text>
+    <text x="67" y="535" class="small">Both frames share one image time</text>
+
+    <rect x="348" y="437" width="280" height="118" rx="15" class="card"/>
+    <circle cx="378" cy="469" r="10" fill="#e9b949"/>
+    <text x="400" y="476" class="heading">IMU input</text>
+    <text x="373" y="510" class="body">Gyro 200 Hz · accel 250 Hz</text>
+    <text x="373" y="535" class="small">Samples are ordered before images</text>
+
+    <rect x="654" y="437" width="280" height="118" rx="15" class="card"/>
+    <circle cx="684" cy="469" r="10" fill="#66a8ff"/>
+    <text x="706" y="476" class="heading">Tracking status</text>
+    <text x="679" y="510" class="body">Tracks · MSCKF updates · motion</text>
+    <text x="679" y="535" class="small">Useful context, not an accuracy proof</text>
+
+    <rect x="960" y="437" width="278" height="118" rx="15" class="card"/>
+    <circle cx="990" cy="469" r="10" fill="#62d68b"/>
+    <text x="1012" y="476" class="heading">Saved run</text>
+    <text x="985" y="510" class="body">CSV · config copies · timestamps</text>
+    <text x="985" y="535" class="small">Keep the output when checking a fault</text>
+  </g>
+
+  <text x="640" y="594" text-anchor="middle" class="body">Click this guide in the README to open the manual test checklist.</text>
+</svg>

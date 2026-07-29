@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -24,6 +25,23 @@ std::string info_or_unknown(const rs2::device &device, rs2_camera_info key) {
 
 std::string domain_name(rs2_timestamp_domain domain) {
   return rs2_timestamp_domain_to_string(domain);
+}
+
+const char *gyro_sensitivity_description(int index) {
+  switch (index) {
+  case 0:
+    return "61.0 mDeg/s per LSB";
+  case 1:
+    return "30.5 mDeg/s per LSB";
+  case 2:
+    return "15.3 mDeg/s per LSB";
+  case 3:
+    return "7.6 mDeg/s per LSB";
+  case 4:
+    return "3.8 mDeg/s per LSB";
+  default:
+    return "invalid";
+  }
 }
 
 struct MotionChoice {
@@ -90,6 +108,20 @@ std::string describe_ir_profiles(const rs2::device &device) {
     }
   }
   return out.str();
+}
+
+bool sensor_is_selected(
+    const rs2::sensor &sensor,
+    const RealSenseSource::StreamSelection &selection) {
+  for (const auto &profile : sensor.get_stream_profiles()) {
+    const auto stream = profile.stream_type();
+    if ((selection.stereo && stream == RS2_STREAM_INFRARED) ||
+        (selection.motion &&
+         (stream == RS2_STREAM_GYRO || stream == RS2_STREAM_ACCEL))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool finite_motion_intrinsics(
@@ -286,7 +318,7 @@ public:
       }
       {
         std::lock_guard<std::mutex> lock(mutex);
-        callbacks = new_callbacks;
+        callbacks = {};
       }
       rs_config.enable_device(selected_serial);
       if (selection.stereo) {
@@ -304,40 +336,12 @@ public:
         rs_config.enable_stream(RS2_STREAM_ACCEL,
                                 RS2_FORMAT_MOTION_XYZ32F,
                                 selected_accel_fps);
-      }
-      motion_correction_available = false;
-      motion_correction_active = false;
-      for (const auto &sensor : device.query_sensors()) {
-        if (selection.stereo &&
-            sensor.supports(RS2_OPTION_EMITTER_ENABLED)) {
-          sensor.set_option(RS2_OPTION_EMITTER_ENABLED,
-                            config.emitter_enabled ? 1.0F : 0.0F);
-        }
-        if (selection.stereo &&
-            sensor.supports(RS2_OPTION_ENABLE_AUTO_EXPOSURE)) {
-          sensor.set_option(RS2_OPTION_ENABLE_AUTO_EXPOSURE,
-                            config.auto_exposure ? 1.0F : 0.0F);
-        }
-        if (selection.motion &&
-            sensor.supports(RS2_OPTION_ENABLE_MOTION_CORRECTION)) {
-          motion_correction_available = true;
-          sensor.set_option(RS2_OPTION_ENABLE_MOTION_CORRECTION,
-                            config.motion_correction_enabled ? 1.0F : 0.0F);
-          const bool enabled =
-              sensor.get_option(RS2_OPTION_ENABLE_MOTION_CORRECTION) > 0.5F;
-          if (enabled != config.motion_correction_enabled) {
-            throw std::runtime_error(
-                "RealSense motion-correction option did not accept the "
-                "requested state");
-          }
-          motion_correction_active = enabled;
-        }
-      }
-      if (selection.motion && config.motion_correction_enabled &&
-          !motion_correction_available) {
-        throw std::runtime_error(
-            "D435i motion correction was requested but the selected device "
-            "does not expose RS2_OPTION_ENABLE_MOTION_CORRECTION");
+        // Resolve first so the option is changed on the exact device instance
+        // that pipeline.start() will open. A separately enumerated device has
+        // its own option object and cannot prove the pipeline acquisition
+        // state.
+        const auto resolved_profile = rs_config.resolve(pipeline);
+        configure_gyro_sensitivity(resolved_profile.get_device());
       }
       {
         std::lock_guard<std::mutex> lock(mutex);
@@ -345,6 +349,7 @@ public:
         disconnected_flag = false;
         statistics = {};
         last_frameset_number = 0;
+        reset_infrared_frame_metadata();
         normalizer.reset();
       }
       profile = pipeline.start(rs_config, [this](rs2::frame frame) {
@@ -353,7 +358,30 @@ public:
       {
         std::lock_guard<std::mutex> lock(mutex);
         active = true;
-        build_report();
+      }
+      configure_sensor_options(profile.get_device());
+      if (selection.motion) {
+        verify_active_gyro_sensitivity(profile.get_device());
+      }
+      {
+        // Keep consuming SDK callbacks during option configuration, but do
+        // not expose those warm-up measurements to the caller. Quiesce the
+        // callback before resetting timestamp/statistics state and publishing
+        // the requested callbacks so the first delivered sample starts a
+        // clean capture epoch.
+        std::lock_guard<std::mutex> callback_lock(callback_mutex);
+        {
+          std::lock_guard<std::mutex> timestamp_lock(timestamp_mutex);
+          normalizer.reset();
+        }
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          callbacks = new_callbacks;
+          statistics = {};
+          last_frameset_number = 0;
+          reset_infrared_frame_metadata();
+          build_report();
+        }
       }
       return true;
     } catch (const rs2::error &e) {
@@ -371,6 +399,154 @@ public:
     }
   }
 
+  void configure_gyro_sensitivity(const rs2::device &selected_device) {
+    gyro_sensitivity_available = false;
+    active_gyro_sensitivity = -1;
+    for (const auto &sensor : selected_device.query_sensors()) {
+      if (!sensor.supports(RS2_OPTION_GYRO_SENSITIVITY)) {
+        continue;
+      }
+      if (gyro_sensitivity_available) {
+        throw std::runtime_error(
+            "multiple D435i sensors expose RS2_OPTION_GYRO_SENSITIVITY");
+      }
+      gyro_sensitivity_available = true;
+      const auto range =
+          sensor.get_option_range(RS2_OPTION_GYRO_SENSITIVITY);
+      const float requested =
+          static_cast<float>(config.gyro_sensitivity);
+      if (requested < range.min || requested > range.max ||
+          range.step <= 0.0F ||
+          std::abs(std::round((requested - range.min) / range.step) *
+                           range.step +
+                       range.min -
+                       requested) >
+              1e-4F) {
+        throw std::runtime_error(
+            "requested gyro sensitivity is outside the D435i option range");
+      }
+      // This option becomes read-only once streaming starts. Set it
+      // explicitly so separate processes cannot inherit an ambiguous SDK or
+      // firmware state.
+      sensor.set_option(RS2_OPTION_GYRO_SENSITIVITY, requested);
+      const float active =
+          sensor.get_option(RS2_OPTION_GYRO_SENSITIVITY);
+      if (std::abs(active - requested) > 1e-4F) {
+        throw std::runtime_error(
+            "RealSense gyro sensitivity did not accept the requested value "
+            "before pipeline start");
+      }
+      active_gyro_sensitivity =
+          static_cast<int>(std::lround(active));
+    }
+    if (!gyro_sensitivity_available) {
+      throw std::runtime_error(
+          "D435i motion streaming requires "
+          "RS2_OPTION_GYRO_SENSITIVITY; use the pinned firmware and "
+          "librealsense versions");
+    }
+  }
+
+  void verify_active_gyro_sensitivity(const rs2::device &active_device) {
+    int matching_sensors = 0;
+    for (const auto &sensor : active_device.query_sensors()) {
+      if (!sensor.supports(RS2_OPTION_GYRO_SENSITIVITY)) {
+        continue;
+      }
+      ++matching_sensors;
+      const float active = sensor.get_option(RS2_OPTION_GYRO_SENSITIVITY);
+      const float requested = static_cast<float>(config.gyro_sensitivity);
+      if (std::abs(active - requested) > 1e-4F) {
+        throw std::runtime_error(
+            "RealSense gyro sensitivity changed when streaming started");
+      }
+      active_gyro_sensitivity = static_cast<int>(std::lround(active));
+    }
+    if (matching_sensors != 1) {
+      throw std::runtime_error(
+          "streaming D435i must expose gyro sensitivity on exactly one "
+          "sensor");
+    }
+  }
+
+  void configure_sensor_options(const rs2::device &active_device) {
+    motion_correction_available = false;
+    motion_correction_active = false;
+    global_time_available = false;
+    global_time_active = false;
+    selected_timestamp_sensors = 0;
+    global_time_supported_sensors = 0;
+    for (const auto &sensor : active_device.query_sensors()) {
+      if (sensor_is_selected(sensor, selection)) {
+        ++selected_timestamp_sensors;
+        if (!sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+          throw std::runtime_error(
+              "a selected D435i sensor does not expose "
+              "RS2_OPTION_GLOBAL_TIME_ENABLED; timestamp policy cannot be "
+              "verified");
+        }
+        ++global_time_supported_sensors;
+        sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED,
+                          config.global_time_enabled ? 1.0F : 0.0F);
+        const bool enabled =
+            sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5F;
+        if (enabled != config.global_time_enabled) {
+          throw std::runtime_error(
+              "RealSense global-time option did not accept the requested "
+              "state after pipeline start");
+        }
+      }
+      if (selection.stereo && sensor.supports(RS2_OPTION_EMITTER_ENABLED)) {
+        sensor.set_option(RS2_OPTION_EMITTER_ENABLED,
+                          config.emitter_enabled ? 1.0F : 0.0F);
+      }
+      if (selection.stereo &&
+          sensor.supports(RS2_OPTION_ENABLE_AUTO_EXPOSURE)) {
+        sensor.set_option(RS2_OPTION_ENABLE_AUTO_EXPOSURE,
+                          config.auto_exposure ? 1.0F : 0.0F);
+      }
+      if (selection.motion &&
+          sensor.supports(RS2_OPTION_ENABLE_MOTION_CORRECTION)) {
+        motion_correction_available = true;
+        sensor.set_option(RS2_OPTION_ENABLE_MOTION_CORRECTION,
+                          config.motion_correction_enabled ? 1.0F : 0.0F);
+        const bool enabled =
+            sensor.get_option(RS2_OPTION_ENABLE_MOTION_CORRECTION) > 0.5F;
+        if (enabled != config.motion_correction_enabled) {
+          throw std::runtime_error(
+              "RealSense motion-correction option did not accept the "
+              "requested state after pipeline start");
+        }
+        motion_correction_active = enabled;
+      }
+    }
+    if (selected_timestamp_sensors == 0) {
+      throw std::runtime_error(
+          "no selected RealSense sensor was found for timestamp policy");
+    }
+    global_time_available =
+        global_time_supported_sensors == selected_timestamp_sensors;
+    global_time_active = config.global_time_enabled;
+    if (selection.motion && config.motion_correction_enabled &&
+        !motion_correction_available) {
+      throw std::runtime_error(
+          "D435i motion correction was requested but the selected device "
+          "does not expose RS2_OPTION_ENABLE_MOTION_CORRECTION");
+    }
+  }
+
+  void reset_infrared_frame_metadata() noexcept {
+    infrared_metadata_samples = 0;
+    infrared_exposure_us_min = std::numeric_limits<double>::infinity();
+    infrared_exposure_us_max = 0.0;
+    infrared_exposure_us_sum = 0.0;
+    infrared_exposure_us_last = 0.0;
+    infrared_gain_level_min = std::numeric_limits<double>::infinity();
+    infrared_gain_level_max = 0.0;
+    infrared_gain_level_sum = 0.0;
+    infrared_gain_level_last = 0.0;
+  }
+
   void handle_frame(rs2::frame frame) noexcept {
     std::lock_guard<std::mutex> callback_lock(callback_mutex);
     try {
@@ -382,6 +558,22 @@ public:
             std::lock_guard<std::mutex> lock(mutex);
             ++statistics.malformed_frames;
             return;
+          }
+          std::optional<double> exposure_us;
+          std::optional<double> gain_level;
+          try {
+            if (left.supports_frame_metadata(
+                    RS2_FRAME_METADATA_ACTUAL_EXPOSURE) &&
+                left.supports_frame_metadata(RS2_FRAME_METADATA_GAIN_LEVEL)) {
+              exposure_us = static_cast<double>(left.get_frame_metadata(
+                  RS2_FRAME_METADATA_ACTUAL_EXPOSURE));
+              gain_level = static_cast<double>(
+                  left.get_frame_metadata(RS2_FRAME_METADATA_GAIN_LEVEL));
+            }
+          } catch (const rs2::error &) {
+            // Per-frame exposure diagnostics must never make acquisition fail.
+            exposure_us.reset();
+            gain_level.reset();
           }
           auto make_image = [this, &frames](const rs2::video_frame &video,
                                             int camera_id,
@@ -434,6 +626,23 @@ public:
                   2 * (frameset_number - last_frameset_number - 1);
             }
             last_frameset_number = frameset_number;
+            if (exposure_us && gain_level && std::isfinite(*exposure_us) &&
+                std::isfinite(*gain_level) && *exposure_us > 0.0 &&
+                *gain_level >= 0.0) {
+              ++infrared_metadata_samples;
+              infrared_exposure_us_min =
+                  std::min(infrared_exposure_us_min, *exposure_us);
+              infrared_exposure_us_max =
+                  std::max(infrared_exposure_us_max, *exposure_us);
+              infrared_exposure_us_sum += *exposure_us;
+              infrared_exposure_us_last = *exposure_us;
+              infrared_gain_level_min =
+                  std::min(infrared_gain_level_min, *gain_level);
+              infrared_gain_level_max =
+                  std::max(infrared_gain_level_max, *gain_level);
+              infrared_gain_level_sum += *gain_level;
+              infrared_gain_level_last = *gain_level;
+            }
             if (!pair) {
               ++statistics.malformed_frames;
             }
@@ -482,7 +691,12 @@ public:
           sample.original_sensor_value = {data.x, data.y, data.z};
           sample.original_sensor_value_available = true;
           sample.value = sample.original_sensor_value;
-          if (stream == RS2_STREAM_ACCEL) {
+          if (stream == RS2_STREAM_GYRO) {
+            sample.value = {
+                sample.original_sensor_value.x * config.gyro_scale_factor,
+                sample.original_sensor_value.y * config.gyro_scale_factor,
+                sample.original_sensor_value.z * config.gyro_scale_factor};
+          } else {
             const Vec3 raw = sample.original_sensor_value;
             sample.value = {
                 accel_to_gyro.rotation[0] * raw.x +
@@ -564,9 +778,29 @@ public:
         << (motion_correction_available ? "true" : "false") << "\n"
         << "motion_correction_active: "
         << (motion_correction_active ? "true" : "false") << "\n"
+        << "global_time_requested: "
+        << (config.global_time_enabled ? "true" : "false") << "\n"
+        << "global_time_available: "
+        << (global_time_available ? "true" : "false") << "\n"
+        << "global_time_active: "
+        << (global_time_active ? "true" : "false") << "\n"
+        << "timestamp_sensor_count: " << selected_timestamp_sensors << "\n"
+        << "global_time_supported_sensor_count: "
+        << global_time_supported_sensors << "\n"
         << "gyro_requested_rate_hz: "
         << (selection.motion ? config.gyro_fps : 0) << "\n"
         << "gyro_rate_hz: " << selected_gyro_fps << "\n"
+        << "gyro_sensitivity_requested: "
+        << (selection.motion ? config.gyro_sensitivity : -1) << "\n"
+        << "gyro_sensitivity_available: "
+        << (gyro_sensitivity_available ? "true" : "false") << "\n"
+        << "gyro_sensitivity_active: " << active_gyro_sensitivity << "\n"
+        << "gyro_sensitivity_description: \""
+        << gyro_sensitivity_description(active_gyro_sensitivity) << "\"\n"
+        << "gyro_scale_factor_configured: "
+        << config.gyro_scale_factor << "\n"
+        << "gyro_scale_factor_applied: "
+        << (selection.motion ? config.gyro_scale_factor : 1.0) << "\n"
         << "gyro_profile_fallback: "
         << (!selection.motion || selected_gyro_fps == config.gyro_fps
                 ? "false"
@@ -582,7 +816,9 @@ public:
         << "\n";
     if (selection.motion) {
       out << "imu_frame: \"gyroscope stream coordinates\"\n"
-          << "gyroscope_value_unit: \"rad/s from librealsense motion API\"\n"
+          << "gyroscope_value_unit: "
+             "\"rad/s after configured scale factor is applied to the "
+             "librealsense motion API value\"\n"
           << "accelerometer_value_unit: "
              "\"m/s^2 from librealsense motion API\"\n"
           << "accelerometer_axis_policy: "
@@ -648,12 +884,27 @@ public:
   int selected_gyro_fps = 0;
   int selected_accel_fps = 0;
   std::uint64_t last_frameset_number = 0;
+  std::uint64_t infrared_metadata_samples = 0;
+  double infrared_exposure_us_min = std::numeric_limits<double>::infinity();
+  double infrared_exposure_us_max = 0.0;
+  double infrared_exposure_us_sum = 0.0;
+  double infrared_exposure_us_last = 0.0;
+  double infrared_gain_level_min = std::numeric_limits<double>::infinity();
+  double infrared_gain_level_max = 0.0;
+  double infrared_gain_level_sum = 0.0;
+  double infrared_gain_level_last = 0.0;
   std::string failure_message;
   std::string report;
   bool active = false;
   bool disconnected_flag = false;
   bool motion_correction_available = false;
   bool motion_correction_active = false;
+  bool gyro_sensitivity_available = false;
+  int active_gyro_sensitivity = -1;
+  bool global_time_available = false;
+  bool global_time_active = false;
+  int selected_timestamp_sensors = 0;
+  int global_time_supported_sensors = 0;
 };
 
 RealSenseSource::RealSenseSource(StreamConfig config)
@@ -686,6 +937,33 @@ std::string RealSenseSource::device_report_yaml() const {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     report = impl_->report;
+    std::ostringstream metadata;
+    metadata << "infrared_frame_metadata_available: "
+             << (impl_->infrared_metadata_samples > 0 ? "true" : "false")
+             << "\n"
+             << "infrared_frame_metadata_samples: "
+             << impl_->infrared_metadata_samples << "\n";
+    if (impl_->infrared_metadata_samples > 0) {
+      const double samples =
+          static_cast<double>(impl_->infrared_metadata_samples);
+      metadata << "infrared_exposure_us_last: "
+               << impl_->infrared_exposure_us_last << "\n"
+               << "infrared_exposure_us_min: "
+               << impl_->infrared_exposure_us_min << "\n"
+               << "infrared_exposure_us_max: "
+               << impl_->infrared_exposure_us_max << "\n"
+               << "infrared_exposure_us_mean: "
+               << impl_->infrared_exposure_us_sum / samples << "\n"
+               << "infrared_gain_level_last: "
+               << impl_->infrared_gain_level_last << "\n"
+               << "infrared_gain_level_min: "
+               << impl_->infrared_gain_level_min << "\n"
+               << "infrared_gain_level_max: "
+               << impl_->infrared_gain_level_max << "\n"
+               << "infrared_gain_level_mean: "
+               << impl_->infrared_gain_level_sum / samples << "\n";
+    }
+    report += metadata.str();
   }
   {
     std::lock_guard<std::mutex> lock(impl_->timestamp_mutex);

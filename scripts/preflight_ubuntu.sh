@@ -217,7 +217,8 @@ if [[ -d "${openvins_dir}/.git" || -f "${openvins_dir}/.git" ]]; then
   if [[ -r "${openvins_patch}" ]] &&
      ovrs_git_tracked_content_matches_patch \
        "${openvins_dir}" "${openvins_patch}"; then
-    pass "OpenVINS exactly matches the reviewed ZUPT velocity patch."
+    pass "OpenVINS exactly matches the reviewed project patch:" \
+      "ZUPT velocity constraint and read-only diagnostics."
   else
     fail "OpenVINS does not exactly match the reviewed project patch."
     ovrs_git_print_tracked_content_changes "${openvins_dir}" || true
@@ -457,6 +458,7 @@ shopt -s nullglob
 local_camera_configs=(
   "${repo_dir}"/config/local/d435i-*/d435i_factory_imucam.yaml
   "${repo_dir}"/config/local/d435i-*/kalibr/kalibr_imucam_chain.yaml
+  "${repo_dir}"/config/local/d435i-*/selected_runtime/*_imucam.yaml
 )
 for local_camera_config in "${local_camera_configs[@]}"; do
   legacy_count="$(

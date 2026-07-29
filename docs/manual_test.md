@@ -6,6 +6,10 @@ assume the root README section 2 has set `D435I_SERIAL` for runtime gates.
 README Step 8 has its own explicit serial/target state gate and must be rerun
 after a reboot or terminal restart.
 
+For normal operation of serial `843212070146`, use the selected-runtime branch
+and `docs/selected_runtime.md`. The factory-smoke and replacement-calibration
+branches are evidence/recovery paths, not alternative runtime configurations.
+
 ## Gate 1: source and build
 
 - [ ] Root `VERSION` is `0.5.2`.
@@ -15,7 +19,7 @@ after a reboot or terminal restart.
 - [ ] CTest ran named tests; it did not print `No tests were found`.
 - [ ] All four executables report v0.5.2 and one source fingerprint.
 - [ ] Build cache points to repository-local Ceres 2.1.0.
-- [ ] Build cache points to repository-local librealsense 2.56.5.
+- [ ] Build cache points to repository-local librealsense 2.57.3.
 - [ ] OpenVINS v2.7 is pinned with ROS and ArUco integration disabled.
 
 If any item fails: stop before connecting estimator output to a test claim.
@@ -30,6 +34,10 @@ If any item fails: stop before connecting estimator output to a test claim.
 - [ ] Malformed frames, camera-frame drops, rejected timestamps, and callback
   errors are zero.
 - [ ] Motion correction was requested, available, and active.
+- [ ] `gyro_sensitivity_requested` and `gyro_sensitivity_active` both equal the
+  configured level `1`, and `gyro_sensitivity_available` is `true`.
+- [ ] `gyro_scale_factor_configured` and `gyro_scale_factor_applied` both equal
+  the selected value `1`.
 
 If enumeration succeeds but sampling fails: treat the camera gate as failed.
 
@@ -38,8 +46,11 @@ If enumeration succeeds but sampling fails: treat the camera gate as failed.
 Inspect the active camera YAML:
 
 ```bash
+test "${D435I_SERIAL}" = "843212070146"
+ACTIVE_CAMERA_YAML="config/local/d435i-${D435I_SERIAL}/selected_runtime/post_rs_imu_candidate_a_imucam.yaml"
+
 grep -E 'T_(cam_imu|imu_cam)' \
-  "config/local/d435i-${D435I_SERIAL}/d435i_factory_imucam.yaml"
+  "${ACTIVE_CAMERA_YAML}"
 ```
 
 - [ ] Exactly two `T_imu_cam` entries exist.
@@ -49,21 +60,51 @@ grep -E 'T_(cam_imu|imu_cam)' \
 - [ ] Both bottom rows are `[0, 0, 0, 1]`.
 - [ ] Translation columns produce a nonzero, physically plausible baseline.
 
-If a legacy bootstrap file contains `T_cam_imu`, run the v0.5.0 migration once.
-Confirm the `.pre-v0.5.0.yaml` backup exists. Never rename the key without
-inverting the matrix.
+The selected file must report
+`camera_calibration_method: "KALIBR_REPEATABILITY_CANDIDATE"` and the expected
+source hashes. If a legacy factory bootstrap contains `T_cam_imu`, it is not
+the active runtime; migrate it only when reconstructing the calibration
+workflow. Never rename the key without inverting the matrix.
 
 ## Gate 4: choose the test branch
 
-### Branch A: mechanical smoke test only
+### Branch A: selected runtime for serial 843212070146
 
+- [ ] The 2026-07-29 post-calibration gyro `1.0` A/B and remaining endpoint
+  drift in `docs/selected_runtime.md` are understood; this branch remains
+  diagnostic until controlled motion passes physical bounds.
 - [ ] `BOOTSTRAP_UNVERIFIED` is understood.
+- [ ] `--allow-unverified-calibration` is recorded in the test log.
+- [ ] The config is
+  `selected_runtime/estimator.yaml`, not the factory bootstrap,
+  candidate B, or the archived pre-recalibration bundle.
+- [ ] All three selected-runtime bundle SHA-256 values match
+  `docs/selected_runtime.md`.
+- [ ] The selected 90 Hz stream SHA-256 matches and contains
+  `gyro_sensitivity: 1` and `gyro_scale_factor: 1.0`.
+- [ ] The reviewed OpenVINS ZUPT patch SHA-256 matches
+  `docs/selected_runtime.md`.
+- [ ] Both replay and live explicitly use `--online-time-offset off`.
+- [ ] `calib_cam_timeoffset: false`, `zupt_only_at_beginning: false`,
+  `zupt_max_disparity: 2.0`, and `zupt_min_stationary_time: 1.0`.
+- [ ] No drift-safe, accuracy, or successful-VIO claim is made from final
+  velocity, `healthy=1`, clean transport counters, or replay completion alone.
+- [ ] Moving acceptance uses a newly recorded dataset containing the explicit
+  sensitivity and scale provenance; a legacy dataset or stationary-only
+  capture is insufficient.
+
+Proceed to Gates 9 and 10. Gates 5-8 describe replacement calibration and do
+not need to be repeated for every normal startup.
+
+### Branch B: mechanical smoke test only
+
+- [ ] The factory bootstrap is being used only to test mechanics.
 - [ ] `--allow-unverified-calibration` is recorded in the test log.
 - [ ] No accuracy, drift, or successful-VIO claim will use this output.
 
 Proceed only to capture/replay/viewer mechanics.
 
-### Branch B: estimator acceptance
+### Branch C: replacement-calibration acceptance
 
 - [ ] One official Kalibr-generated AprilGrid was printed at 100%/actual size.
 - [ ] The print is mounted flat on a rigid white board with the required
@@ -138,6 +179,8 @@ For all three:
 - [ ] Stereo and IMU-camera captures use the same IR profile.
 - [ ] Allan and IMU-camera captures use the same gyro/accelerometer rates and
   active motion-correction policy.
+- [ ] All three captures use one verified `global_time_enabled` policy and
+  every selected stream reports the corresponding timestamp domain.
 - [ ] Capture modes are exactly `imu-allan`, `stereo-calibration`, and
   `imu-camera-calibration`; Allan correctly has IR disabled.
 - [ ] All drop/error/integrity counters are zero.
@@ -155,6 +198,8 @@ Any failed item requires a new output directory and a new capture.
   index/image counts and dimensions, and staged IMU row counts.
 - [ ] Its report remains `UNVERIFIED_EXPORT_SET` and hashes the exact three
   manifests used for external processing.
+- [ ] Its report records one `global_time_enabled` value and rejects a
+  Global Time/Hardware Clock mixture.
 - [ ] `cam0` and `cam1` contain nanosecond PNG names where applicable.
 - [ ] Root `imu0.csv` has the official seven-column bag-creator header where
   applicable.
@@ -166,6 +211,9 @@ Any failed item requires a new output directory and a new capture.
 - [ ] Any noise inflation was justified and recorded; it was not hidden.
 - [ ] Stereo Kalibr produced camchain, text result, and PDF.
 - [ ] Camera-IMU Kalibr produced camchain, text result, and PDF.
+- [ ] A second independently recorded camera-IMU run produced repeatable
+  transforms, IMU intrinsics, and time offset; millisecond-scale session
+  changes were treated as rejection evidence.
 - [ ] Both Kalibr runs used `--show-extraction`; tag IDs and image coverage
   were visually checked in both cameras.
 - [ ] Stereo processing ran in a new empty work directory with no unexplained
@@ -183,7 +231,11 @@ Missing topics or output files fail the gate.
 - [ ] Stereo baseline was nonzero and physically plausible.
 - [ ] cam0/cam1 time-offset difference was within the operator-declared limit.
 - [ ] Extended IMU YAML has positive noise values.
-- [ ] `Tg` is the zero matrix.
+- [ ] Intrinsics came from Kalibr `scale-misalignment`, not its default
+  `calibrated` model or a hand-authored status label.
+- [ ] `Tw`/`Ta`, `C_gyro_i`, and g-sensitivity were repeatable against an
+  independently captured, fully excited camera-IMU sequence.
+- [ ] `Tg` equals the recorded Kalibr `A*C_gyro_i` conversion.
 - [ ] Camera reprojection plots were inspected.
 - [ ] IMU residuals and biases were inspected against 3-sigma bounds.
 - [ ] Any repeatable stationary gravity mismatch was reconciled by those
@@ -198,6 +250,9 @@ The structural script's success still means manual review is required.
 
 ## Gate 8: promotion
 
+This gate applies only to Branch C. The current selected candidate A did not
+pass strict promotion and must not be relabelled.
+
 - [ ] Review report hashes match the current camchain and IMU YAML.
 - [ ] A shared time-offset source (`cam0` or `cam1`) was chosen explicitly.
 - [ ] All four promotion acknowledgement flags reflect completed review.
@@ -209,13 +264,23 @@ The structural script's success still means manual review is required.
 
 ## Gate 9: new VIO dataset and replay
 
-- [ ] Dataset was recorded after v0.5.2 rebuild and calibration promotion.
+- [ ] Dataset was recorded after the current v0.5.2/librealsense 2.57.3 build.
 - [ ] Dataset has no `INCOMPLETE` marker.
 - [ ] Replay did not use `--serial`.
-- [ ] Replay did not use `--allow-unverified-calibration`.
-- [ ] Replay used the matching verified estimator config.
-- [ ] Viewer displayed IR1/IR2 and the live isometric XYZ trajectory with
-      visible X, Y, and Z axes.
+- [ ] Branch A used the exact selected candidate A config, the explicit
+  `--allow-unverified-calibration` acknowledgement, and
+  `--online-time-offset off`.
+- [ ] Branch C used its matching promoted estimator without an unverified
+  override.
+- [ ] Viewer displayed IR1/IR2 and the interactive global XYZ trajectory with
+      visible X, Y, and Z axes plus the ground grid.
+- [ ] Incoming states did not move or rescale the grid/axes; only explicit
+      `F` fit changed framing.
+- [ ] Resizing the trajectory window changed its aspect ratio without forcing
+      the old 640x480 canvas.
+- [ ] Left-drag orbited, middle/right-drag panned, and wheel zoom stayed
+      anchored near the cursor without changing estimator output.
+- [ ] `F` fit the track and `R`, `0`, or double-left-click reset the view.
 - [ ] Run output finalized cleanly with no `INCOMPLETE`.
 - [ ] Trajectory summary contains finite, monotonic states.
 - [ ] Path/displacement limits were selected from the physical test before
@@ -231,9 +296,28 @@ acceptance.
 - [ ] Replay passed first.
 - [ ] Live command selected the exact serial.
 - [ ] Live stream configuration matched calibration resolution/rates/policy.
+- [ ] Branch A again used selected candidate A and
+  `--online-time-offset off`; it did not inherit a diagnostic override from a
+  previous shell.
 - [ ] Viewer remained responsive and closed with `q`, `Esc`, or Ctrl+C.
+- [ ] Viewer orbit/pan/zoom remained responsive during live state updates.
+- [ ] Image resize preserved aspect ratio and the default trajectory view
+  showed positive global Z upward.
+- [ ] Viewer visual-support status progressed from `WARMING_UP` to `HEALTHY`
+  in the well-lit stationary scene, without rapid status oscillation.
+- [ ] `state.csv` and `diagnostics.csv` contained MSCKF candidate, accepted,
+  ratio, and update-age fields after the first non-empty update batch. Review
+  them as diagnostic evidence; do not invent an acceptance threshold from one
+  run.
+- [ ] The trajectory pane waited for the first `HEALTHY` pose, then placed its
+  origin axis and camera marker together. Any later separation matched logged
+  estimated motion rather than a viewer recenter.
+- [ ] Deliberate visual occlusion or a dark/blank view held for at least one
+  second produced `DEGRADED`; restoring a well-tracked view for at least 1.5
+  seconds recovered `HEALTHY`.
 - [ ] No camera disconnect, queue overflow, timestamp rejection, NaN, or
-  unhealthy estimator state occurred.
+  unexpected weak visual-support state occurred outside the deliberate
+  transition test.
 - [ ] With the camera rigidly stationary, a person crossed the foreground
   without producing sustained camera translation or permanently disabling
   stationary behavior.
@@ -241,6 +325,12 @@ acceptance.
   logged velocity returned near zero instead of continuing to propagate.
 - [ ] Run finalized cleanly.
 - [ ] Physically defined trajectory bounds passed.
+- [ ] Fast motion did not produce a multi-metre jump inconsistent with the
+  operator's actual movement. If it did, the clean transport/health flags were
+  not reported as trajectory success.
+- [ ] `state.csv`, `diagnostics.csv`, `run_metadata.yaml`, and
+  `application.log` preserved the configured threshold, health state, visual
+  support, MSCKF batch quality, and every health transition.
 
 Only after all applicable gates pass may the run be described as successful
 for that exact hardware, configuration, and test.

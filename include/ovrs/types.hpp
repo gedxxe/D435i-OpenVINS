@@ -54,6 +54,13 @@ struct StereoFrame {
   ImageFrame camera1;
 };
 
+enum class TrackingHealthStatus : std::uint8_t {
+  disabled = 0,
+  warming_up = 1,
+  healthy = 2,
+  degraded = 3,
+};
+
 struct EstimatorState {
   double timestamp = 0.0;
   Vec3 position_world_m;
@@ -62,6 +69,27 @@ struct EstimatorState {
   std::array<double, 4> q_world_to_imu_xyzw{{0.0, 0.0, 0.0, 1.0}};
   Vec3 gyro_bias_rad_s;
   Vec3 accel_bias_m_s2;
+  // Legacy visualization count from OpenVINS' last accepted MSCKF set.
+  std::uint64_t msckf_update_features = 0;
+  std::uint64_t msckf_candidate_features = 0;
+  std::uint64_t msckf_accepted_features = 0;
+  double msckf_acceptance_ratio =
+      std::numeric_limits<double>::quiet_NaN();
+  double msckf_update_age_s =
+      std::numeric_limits<double>::quiet_NaN();
+  bool msckf_update_quality_available = false;
+  std::uint64_t slam_features = 0;
+  std::uint64_t visual_support_features = 0;
+  double tracking_health_good_duration_s = 0.0;
+  double tracking_health_bad_duration_s = 0.0;
+  TrackingHealthStatus tracking_health_status =
+      TrackingHealthStatus::disabled;
+  bool tracking_health_gate_enabled = false;
+  double camera_imu_time_offset_s = 0.0;
+  double camera_imu_time_offset_variance_s2 =
+      std::numeric_limits<double>::quiet_NaN();
+  bool camera_imu_time_offset_online = false;
+  bool camera_imu_time_offset_variance_available = false;
   // Error-state order: orientation, position, velocity, gyro bias, accel bias.
   std::array<double, 15> covariance_diagonal{};
   bool covariance_available = false;
@@ -90,6 +118,15 @@ struct DiagnosticsSnapshot {
   double estimator_rate_hz = 0.0;
   double processing_latency_ms = 0.0;
   bool initialized = false;
+  bool healthy = false;
+  std::uint64_t msckf_candidate_features = 0;
+  std::uint64_t msckf_accepted_features = 0;
+  double msckf_acceptance_ratio = 0.0;
+  double msckf_update_age_s = 0.0;
+  bool msckf_update_quality_available = false;
+  std::uint64_t visual_support_features = 0;
+  TrackingHealthStatus tracking_health_status =
+      TrackingHealthStatus::disabled;
 };
 
 } // namespace ovrs

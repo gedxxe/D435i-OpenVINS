@@ -1,0 +1,42 @@
+%YAML:1.0
+# Candidate A is selected from two post-device-calibration Kalibr runs and
+# bounded runtime comparison. It remains intentionally BOOTSTRAP_UNVERIFIED
+# because the small target and IMU-noise provenance limit promotion.
+calibration_state: "BOOTSTRAP_UNVERIFIED"
+calibrated_serial: "843212070146"
+camera_calibration_method: "KALIBR_REPEATABILITY_CANDIDATE"
+kalibr_primary_camchain_sha256: "319fef17bd0eaffdb447ae3248aea3c51f80e2fa43a534d1437e8c3fc970e77a"
+kalibr_repeat_camchain_sha256: "f51569efcc0ebc517b6c77d96459877bee8d68951e6e7894ff855af46d81f3bf"
+kalibr_repeatability_review_sha256: "cddde5c37e4520770eb4baa74396f274d4389bc13ef20ca5239b91dc350632fd"
+shared_time_offset_source: "cam0"
+T_gyro_accel:
+  - [1.0, 0.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0, 0.0]
+  - [0.0, 0.0, 1.0, 0.0]
+  - [0.0, 0.0, 0.0, 1.0]
+cam0:
+  T_imu_cam:
+    - [0.9999303680389152, 0.01083764053900062, 0.004669541851901655, -0.0008763399156283565]
+    - [-0.01083018638604156, 0.9999400416786131, -0.0016186755748726711, 0.010934965176274123]
+    - [-0.0046868044980403, 0.0015679908547245164, 0.9999877875595663, 0.009146583240463567]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [1]
+  camera_model: pinhole
+  distortion_model: radtan
+  distortion_coeffs: [0.021570073610626097, 0.00030447394513367335, 0.0030053873741928095, -0.00037910548300224966]
+  intrinsics: [429.07599120838097, 430.24022108658403, 429.52669094183244, 240.81531367449668]
+  resolution: [848, 480]
+  timeshift_cam_imu: -0.004900203074244532
+cam1:
+  T_imu_cam:
+    - [0.9998524715921409, 0.012156194980069042, -0.012135154498148655, 0.04800413571471162]
+    - [-0.012144803227432398, 0.9999257370540524, 0.0010119938128260557, 0.010365579930976384]
+    - [0.01214655529993343, -0.0008644654514755795, 0.9999258541981145, 0.009002493739972]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [0]
+  camera_model: pinhole
+  distortion_model: radtan
+  distortion_coeffs: [0.027070497310389293, -0.005864116099541449, 0.0036321332986934793, -0.0017548389371401397]
+  intrinsics: [429.2065426863949, 430.7257744200056, 422.8422991553815, 242.34038125504694]
+  resolution: [848, 480]
+  timeshift_cam_imu: -0.004900203074244532

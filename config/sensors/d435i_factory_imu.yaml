@@ -13,6 +13,7 @@ imu0:
   # captured with this policy have librealsense factory motion correction
   # enabled before project-owned accel-to-gyro frame rotation.
   realsense_motion_correction_enabled: true
+  realsense_global_time_enabled: true
   T_i_b:
     - [1.0, 0.0, 0.0, 0.0]
     - [0.0, 1.0, 0.0, 0.0]

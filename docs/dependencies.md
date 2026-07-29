@@ -27,7 +27,7 @@ review and explicit approval. Confirm the resolved version:
 pkg-config --modversion realsense2
 ```
 
-The reproducible build accepts the package only at exactly `2.56.5`.
+The reproducible build accepts the package only at exactly `2.57.3`.
 The package also installs persistent udev rules. For a local RSUSB build,
 installing an equivalent rule under `/etc/udev/rules.d` is a separate
 privileged, persistent host change: inspect the pinned
@@ -39,11 +39,11 @@ permissions problem.
 ## Repository-local source fallback
 
 If the exact package is unavailable or kernel integration is problematic,
-`scripts/build_ubuntu.sh` clones tag `v2.56.5`, verifies commit
-`38a41441971387197193ad3aeae3cefe6a11f2cb`, and builds with
+`scripts/build_ubuntu.sh` clones tag `v2.57.3`, verifies commit
+`5e046e509995cda79b42d89fa95ab65f90678641`, and builds with
 `FORCE_RSUSB_BACKEND=ON` under `.deps`. Optional tools, examples, tests,
 graphical and Python extensions, update checks, the all-in-one static bundle,
-and firmware downloads are disabled. Librealsense v2.56.5 unconditionally
+and firmware downloads are disabled. Librealsense v2.57.3 unconditionally
 invokes a bare `ldconfig` from its install rules even for a custom prefix. The
 build creates a private no-op executable under `.deps/build` and prepends that
 one directory to `PATH` only for `cmake --install`; it does not modify the

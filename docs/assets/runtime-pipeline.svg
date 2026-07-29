@@ -22,7 +22,7 @@
   <g transform="translate(40 100)">
     <rect class="sensor" width="190" height="92" rx="16"/>
     <text x="95" y="38" text-anchor="middle" class="label">IR1 + IR2</text>
-    <text x="95" y="65" text-anchor="middle" class="small">848×480 Y8 @ 30 Hz</text>
+    <text x="95" y="65" text-anchor="middle" class="small">90 Hz live · 30 Hz calibration</text>
   </g>
   <g transform="translate(40 300)">
     <rect class="sensor" width="190" height="112" rx="16"/>

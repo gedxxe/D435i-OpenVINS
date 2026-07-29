@@ -13,9 +13,12 @@ struct StreamConfig {
   int camera_fps = 30;
   int gyro_fps = 200;
   int accel_fps = 250;
+  int gyro_sensitivity = 1;
+  double gyro_scale_factor = 1.0;
   bool emitter_enabled = false;
   bool auto_exposure = true;
   bool motion_correction_enabled = true;
+  bool global_time_enabled = true;
   std::size_t imu_queue_size = 2048;
   std::size_t stereo_queue_size = 16;
   double stereo_tolerance_ms = 2.0;

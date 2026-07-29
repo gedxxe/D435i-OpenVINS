@@ -24,8 +24,8 @@ Built repository-locally; not vendored or installed globally.
 
 ## librealsense
 
-- Version: v2.56.5
-- Commit: `38a41441971387197193ad3aeae3cefe6a11f2cb`
+- Version: v2.57.3
+- Commit: `5e046e509995cda79b42d89fa95ab65f90678641`
 - URL: <https://github.com/realsenseai/librealsense>
 - License: Apache License 2.0
 

@@ -117,9 +117,9 @@ def verify_review_provenance(
             "review report still contains unchecked manual-review items"
         )
     checked = re.findall(r"^- \[x\] ", report, flags=re.MULTILINE)
-    if len(checked) != 7:
+    if len(checked) != 8:
         raise CalibrationError(
-            "review report must contain exactly seven completed checklist items"
+            "review report must contain exactly eight completed checklist items"
         )
 
 
@@ -235,6 +235,15 @@ def main() -> int:
         ):
             raise CalibrationError(
                 "IMU YAML lacks reviewed multi-orientation intrinsics"
+            )
+        if (
+            imu["imu0"].get("imu_intrinsic_method")
+            != "KALIBR_SCALE_MISALIGNMENT"
+            or imu["imu0"].get("imu_intrinsic_mapping")
+            != "ovrs-kalibr-openvins-imu-v1"
+        ):
+            raise CalibrationError(
+                "IMU YAML lacks the supported Kalibr intrinsic provenance"
             )
         imu_document: dict[str, Any] = {
             "calibration_state": "KALIBR_VERIFIED",

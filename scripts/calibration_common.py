@@ -38,7 +38,10 @@ class CaptureInfo:
     synchronized_imu_rows: int
     gyro_rate_hz: int
     accelerometer_rate_hz: int
+    gyro_sensitivity: int | None
+    gyro_scale_factor: Decimal | None
     motion_correction_active: bool
+    global_time_enabled: bool
     infrared_profile: str
     recording_duration_s: Decimal
     calibration_target: Path | None
@@ -78,6 +81,129 @@ def simple_yaml_map(path: Path) -> dict[str, str]:
     return result
 
 
+def simple_yaml_nested_map(path: Path, parent: str) -> dict[str, str]:
+    """Parse one indented scalar map from the repository's emitted YAML."""
+    result: dict[str, str] = {}
+    inside = False
+    for line_number, raw_line in enumerate(read_text(path).splitlines(), 1):
+        if not inside:
+            if raw_line.strip() == f"{parent}:" and not raw_line[:1].isspace():
+                inside = True
+            continue
+        if raw_line and not raw_line[:1].isspace():
+            break
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise CalibrationError(
+                f"{path}:{line_number}: invalid key in {parent}: {key}"
+            )
+        if key in result:
+            raise CalibrationError(
+                f"{path}:{line_number}: duplicate {parent} key {key}"
+            )
+        value = value.split("#", 1)[0].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not value:
+            raise CalibrationError(
+                f"{path}:{line_number}: empty {parent}.{key}"
+            )
+        result[key] = value
+    if not inside:
+        raise CalibrationError(f"{path} is missing {parent}")
+    return result
+
+
+def timestamp_policy_from_evidence(
+    stream_path: Path,
+    report_path: Path,
+    expected_streams: Iterable[str],
+    source_label: str,
+) -> bool:
+    stream = simple_yaml_map(stream_path)
+    report = simple_yaml_map(report_path)
+    domains = simple_yaml_nested_map(report_path, "timestamp_domains")
+    expected = tuple(expected_streams)
+
+    if "global_time_enabled" in stream:
+        enabled = parse_bool(
+            stream["global_time_enabled"],
+            f"{stream_path}:global_time_enabled",
+        )
+        for key in ("global_time_requested", "global_time_active"):
+            if parse_bool(
+                report.get(key, ""), f"{report_path}:{key}"
+            ) != enabled:
+                raise CalibrationError(
+                    f"{source_label}: {key} does not confirm the resolved "
+                    "stream configuration"
+                )
+        if not parse_bool(
+            report.get("global_time_available", ""),
+            f"{report_path}:global_time_available",
+        ):
+            raise CalibrationError(
+                f"{source_label}: global-time option was not verified"
+            )
+    else:
+        # Legacy captures predate the explicit option. Accept them only when
+        # all selected streams prove one unambiguous observed clock domain.
+        observed = {domains.get(name, "") for name in expected}
+        if observed == {"Global Time"}:
+            enabled = True
+        elif observed == {"Hardware Clock"}:
+            enabled = False
+        else:
+            details = ", ".join(
+                f"{name}={domains.get(name, 'missing')}" for name in expected
+            )
+            raise CalibrationError(
+                f"{source_label}: cannot derive one timestamp policy from "
+                f"legacy evidence: {details}"
+            )
+
+    expected_domain = "Global Time" if enabled else "Hardware Clock"
+    for name in expected:
+        actual = domains.get(name)
+        if actual != expected_domain:
+            raise CalibrationError(
+                f"{source_label}: {name} timestamp domain is "
+                f"{actual or 'missing'}, expected {expected_domain}"
+            )
+    return enabled
+
+
+def export_global_time_enabled(
+    manifest_path: Path, manifest: dict[str, str]
+) -> bool:
+    expected_streams = {
+        "imu-allan": ("gyro", "accelerometer"),
+        "stereo-calibration": ("infrared_1", "infrared_2"),
+        "imu-camera-calibration": (
+            "gyro",
+            "accelerometer",
+            "infrared_1",
+            "infrared_2",
+        ),
+    }
+    mode = manifest.get("capture_mode", "")
+    if mode not in expected_streams:
+        raise CalibrationError(
+            f"{manifest_path}: unsupported capture mode for timestamp policy"
+        )
+    root = manifest_path.parent
+    return timestamp_policy_from_evidence(
+        root / "ovrs_metadata" / "source_resolved_stream_config.yaml",
+        root / "ovrs_metadata" / "source_device_report.yaml",
+        expected_streams[mode],
+        str(manifest_path),
+    )
+
+
 def require_scalar(values: dict[str, str], key: str, source: Path) -> str:
     value = values.get(key, "")
     if not value:
@@ -97,6 +223,111 @@ def parse_nonnegative_int(value: str, field: str) -> int:
     if not re.fullmatch(r"[0-9]+", value):
         raise CalibrationError(f"{field} must be a nonnegative integer")
     return int(value)
+
+
+def gyro_sensitivity_from_evidence(
+    stream_path: Path,
+    report_path: Path,
+    metadata_path: Path,
+    motion_enabled: bool,
+) -> int | None:
+    """Return a verified dynamic sensitivity index, or None for legacy data."""
+    if not motion_enabled:
+        return None
+    stream = simple_yaml_map(stream_path)
+    report = simple_yaml_map(report_path)
+    metadata = simple_yaml_map(metadata_path)
+    fields = (
+        ("stream", "gyro_sensitivity", stream),
+        ("report", "gyro_sensitivity_requested", report),
+        ("report", "gyro_sensitivity_available", report),
+        ("report", "gyro_sensitivity_active", report),
+        ("metadata", "gyro_sensitivity_active", metadata),
+    )
+    present = [key in values for _, key, values in fields]
+    if not any(present):
+        return None
+    if not all(present):
+        missing = ", ".join(
+            f"{source}:{key}"
+            for (source, key, _), is_present in zip(fields, present)
+            if not is_present
+        )
+        raise CalibrationError(
+            f"incomplete gyro-sensitivity provenance; missing {missing}"
+        )
+    if not parse_bool(
+        report["gyro_sensitivity_available"],
+        f"{report_path}:gyro_sensitivity_available",
+    ):
+        raise CalibrationError("gyro-sensitivity option was not verified")
+    configured = parse_nonnegative_int(
+        stream["gyro_sensitivity"], f"{stream_path}:gyro_sensitivity"
+    )
+    requested = parse_nonnegative_int(
+        report["gyro_sensitivity_requested"],
+        f"{report_path}:gyro_sensitivity_requested",
+    )
+    active = parse_nonnegative_int(
+        report["gyro_sensitivity_active"],
+        f"{report_path}:gyro_sensitivity_active",
+    )
+    metadata_active = parse_nonnegative_int(
+        metadata["gyro_sensitivity_active"],
+        f"{metadata_path}:gyro_sensitivity_active",
+    )
+    if configured > 4:
+        raise CalibrationError("gyro-sensitivity index must be in [0,4]")
+    if len({configured, requested, active, metadata_active}) != 1:
+        raise CalibrationError(
+            "gyro-sensitivity configuration, request, readback, and capture "
+            "metadata disagree"
+        )
+    return configured
+
+
+def gyro_scale_factor_from_evidence(
+    stream_path: Path,
+    report_path: Path,
+    metadata_path: Path,
+    motion_enabled: bool,
+) -> Decimal | None:
+    """Return the applied project gyro scale, or None for legacy data."""
+    if not motion_enabled:
+        return None
+    stream = simple_yaml_map(stream_path)
+    report = simple_yaml_map(report_path)
+    metadata = simple_yaml_map(metadata_path)
+    fields = (
+        ("stream", "gyro_scale_factor", stream),
+        ("report", "gyro_scale_factor_configured", report),
+        ("report", "gyro_scale_factor_applied", report),
+        ("metadata", "gyro_scale_factor_applied", metadata),
+    )
+    present = [key in values for _, key, values in fields]
+    if not any(present):
+        return None
+    if not all(present):
+        missing = ", ".join(
+            f"{source}:{key}"
+            for (source, key, _), is_present in zip(fields, present)
+            if not is_present
+        )
+        raise CalibrationError(
+            f"incomplete gyro-scale provenance; missing {missing}"
+        )
+    values = [
+        finite_decimal(values[key], f"{source}:{key}")
+        for source, key, values in fields
+    ]
+    if any(value <= 0 or value > 100 for value in values):
+        raise CalibrationError("gyro scale factor must be in (0,100]")
+    if len(set(values)) != 1:
+        raise CalibrationError(
+            "gyro scale configuration, device report, and capture metadata "
+            "disagree"
+        )
+    return values[0]
 
 
 def finite_decimal(value: str, field: str) -> Decimal:
@@ -308,7 +539,7 @@ def validate_capture(root: Path) -> CaptureInfo:
     metadata = simple_yaml_map(metadata_path)
     summary = simple_yaml_map(summary_path)
     report = simple_yaml_map(report_path)
-    simple_yaml_map(stream_path)
+    stream = simple_yaml_map(stream_path)
 
     if require_scalar(metadata, "format", metadata_path) != (
         "ovrs-calibration-capture-v1"
@@ -351,6 +582,35 @@ def validate_capture(root: Path) -> CaptureInfo:
         "motion_streams_enabled",
     ) != motion_enabled:
         raise CalibrationError("device report motion selection conflicts with mode")
+
+    expected_streams: list[str] = []
+    if stereo_enabled:
+        expected_streams.extend(("infrared_1", "infrared_2"))
+    if motion_enabled:
+        expected_streams.extend(("gyro", "accelerometer"))
+    global_time_enabled = timestamp_policy_from_evidence(
+        stream_path, report_path, expected_streams, str(root)
+    )
+    gyro_sensitivity = gyro_sensitivity_from_evidence(
+        stream_path,
+        report_path,
+        metadata_path,
+        motion_enabled,
+    )
+    gyro_scale_factor = gyro_scale_factor_from_evidence(
+        stream_path,
+        report_path,
+        metadata_path,
+        motion_enabled,
+    )
+    if "global_time_enabled" in stream and parse_bool(
+        require_scalar(metadata, "global_time_active", metadata_path),
+        "global_time_active",
+    ) != global_time_enabled:
+        raise CalibrationError(
+            "capture metadata and stream configuration disagree on "
+            "global-time state"
+        )
 
     for key in (
         "malformed_frames",
@@ -543,7 +803,10 @@ def validate_capture(root: Path) -> CaptureInfo:
         synchronized_imu_rows=synchronized_imu_rows,
         gyro_rate_hz=gyro_rate_hz,
         accelerometer_rate_hz=accelerometer_rate_hz,
+        gyro_sensitivity=gyro_sensitivity,
+        gyro_scale_factor=gyro_scale_factor,
         motion_correction_active=motion_correction_active,
+        global_time_enabled=global_time_enabled,
         infrared_profile=infrared_profile,
         recording_duration_s=recording_duration_s,
         calibration_target=calibration_target,

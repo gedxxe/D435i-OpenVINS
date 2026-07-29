@@ -3,10 +3,18 @@ width: 848
 height: 480
 camera_fps: 30
 gyro_fps: 200
+# Explicit SDK level 1 (30.5 mDeg/s per LSB, nominal +/-1000 deg/s).
+# RealSenseSource sets and verifies this volatile option before streaming.
+gyro_sensitivity: 1
+# Use the SDK rad/s value directly. A post-EEPROM-calibration identical-data
+# replay A/B rejected the former serial-specific 0.5 factor: 0.5 reached the
+# 3 m/s gate, while 1.0 completed and was then confirmed by a 131 s live run.
+gyro_scale_factor: 1.0
 accelerometer_fps: 250
 emitter_enabled: false
 auto_exposure: true
 motion_correction_enabled: true
+global_time_enabled: true
 imu_queue_size: 4096
 stereo_queue_size: 32
 stereo_tolerance_ms: 2.0

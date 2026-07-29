@@ -45,7 +45,15 @@ private:
   double latency_sum_ms_ = 0.0;
   double latency_max_ms_ = 0.0;
   std::uint64_t state_count_ = 0;
+  std::uint64_t unhealthy_state_count_ = 0;
+  std::uint64_t tracking_health_transition_count_ = 0;
   std::uint64_t rejected_nonfinite_states_ = 0;
+  TrackingHealthStatus last_tracking_health_status_ =
+      TrackingHealthStatus::disabled;
+  double last_camera_imu_time_offset_s_ = 0.0;
+  double last_camera_imu_time_offset_variance_s2_ = 0.0;
+  bool last_camera_imu_time_offset_online_ = false;
+  bool last_camera_imu_time_offset_variance_available_ = false;
 };
 
 } // namespace ovrs

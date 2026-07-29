@@ -8,6 +8,13 @@ calibrated_serial: "REPLACE_WITH_DEVICE_SERIAL"
 verbosity: "WARNING"
 max_estimated_speed_m_s: 3.0
 max_accel_bias_m_s2: 2.0
+# This gate changes only the reported health status. It never rewrites pose,
+# velocity, covariance, or OpenVINS feature updates.
+tracking_health_gate_enabled: true
+tracking_health_min_visual_support_features: 12
+tracking_health_degrade_after_s: 1.0
+tracking_health_recover_after_s: 1.5
+tracking_health_warmup_timeout_s: 3.0
 use_fej: true
 integration: "rk4"
 use_stereo: true

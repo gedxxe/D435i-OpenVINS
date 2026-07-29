@@ -1,4 +1,5 @@
 #include "ovrs/trajectory.hpp"
+#include "ovrs/tracking_health.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,8 +17,23 @@ bool finite_state(const EstimatorState &state) {
   if (!std::isfinite(state.timestamp) || !finite(state.position_world_m) ||
       !finite(state.velocity_world_m_s) || !finite(state.gyro_bias_rad_s) ||
       !finite(state.accel_bias_m_s2) ||
+      !std::isfinite(state.camera_imu_time_offset_s) ||
+      !std::isfinite(state.tracking_health_good_duration_s) ||
+      !std::isfinite(state.tracking_health_bad_duration_s) ||
+      state.tracking_health_good_duration_s < 0.0 ||
+      state.tracking_health_bad_duration_s < 0.0 ||
       !std::isfinite(state.processing_latency_ms) ||
       state.processing_latency_ms < 0.0) {
+    return false;
+  }
+  if (state.msckf_update_quality_available &&
+      (!std::isfinite(state.msckf_acceptance_ratio) ||
+       !std::isfinite(state.msckf_update_age_s) ||
+       state.msckf_acceptance_ratio < 0.0 ||
+       state.msckf_acceptance_ratio > 1.0 ||
+       state.msckf_update_age_s < 0.0 ||
+       state.msckf_accepted_features >
+           state.msckf_candidate_features)) {
     return false;
   }
   double quaternion_norm_squared = 0.0;
@@ -39,6 +55,11 @@ bool finite_state(const EstimatorState &state) {
         return false;
       }
     }
+  }
+  if (state.camera_imu_time_offset_variance_available &&
+      (!std::isfinite(state.camera_imu_time_offset_variance_s2) ||
+       state.camera_imu_time_offset_variance_s2 < 0.0)) {
+    return false;
   }
   return true;
 }
@@ -84,7 +105,14 @@ bool RunWriter::open(const std::filesystem::path &directory,
   latency_sum_ms_ = 0.0;
   latency_max_ms_ = 0.0;
   state_count_ = 0;
+  unhealthy_state_count_ = 0;
+  tracking_health_transition_count_ = 0;
+  last_tracking_health_status_ = TrackingHealthStatus::disabled;
   rejected_nonfinite_states_ = 0;
+  last_camera_imu_time_offset_s_ = 0.0;
+  last_camera_imu_time_offset_variance_s2_ = 0.0;
+  last_camera_imu_time_offset_online_ = false;
+  last_camera_imu_time_offset_variance_available_ = false;
   std::ofstream incomplete(directory / "INCOMPLETE",
                            std::ios::binary | std::ios::trunc);
   incomplete << "ovrs run output is incomplete until clean finalization\n";
@@ -112,14 +140,24 @@ bool RunWriter::open(const std::filesystem::path &directory,
   state_ << "timestamp,px,py,pz,vx,vy,vz,qx,qy,qz,qw,bgx,bgy,bgz,bax,"
             "bay,baz,cov_ori_x,cov_ori_y,cov_ori_z,cov_pos_x,cov_pos_y,"
             "cov_pos_z,cov_vel_x,cov_vel_y,cov_vel_z,cov_bg_x,cov_bg_y,"
-            "cov_bg_z,cov_ba_x,cov_ba_y,cov_ba_z,initialized,healthy,"
+            "cov_bg_z,cov_ba_x,cov_ba_y,cov_ba_z,"
+            "msckf_update_features,msckf_candidate_features,"
+            "msckf_accepted_features,msckf_acceptance_ratio,"
+            "msckf_update_age_s,slam_features,visual_support_features,"
+            "tracking_health_status,tracking_health_good_duration_s,"
+            "tracking_health_bad_duration_s,tracking_health_gate_enabled,"
+            "camera_imu_time_offset_s,camera_imu_time_offset_std_s,"
+            "camera_imu_time_offset_online,initialized,healthy,"
             "processing_latency_ms\n";
   diagnostics_
       << "timestamp,received_camera_frames,valid_stereo_pairs,"
          "received_gyro_samples,received_accel_samples,"
          "synchronized_imu_samples,rejected_timestamps,dropped_frames,"
          "imu_queue_depth,camera_queue_depth,camera_rate_hz,imu_rate_hz,"
-         "estimator_rate_hz,processing_latency_ms,initialized\n";
+         "estimator_rate_hz,processing_latency_ms,initialized,healthy,"
+         "msckf_candidate_features,msckf_accepted_features,"
+         "msckf_acceptance_ratio,msckf_update_age_s,"
+         "visual_support_features,tracking_health_status\n";
   output_open_ = true;
   return true;
 }
@@ -156,6 +194,14 @@ bool RunWriter::write_state(const EstimatorState &s, std::string *error) {
   last_timestamp_ = s.timestamp;
   latency_sum_ms_ += s.processing_latency_ms;
   latency_max_ms_ = std::max(latency_max_ms_, s.processing_latency_ms);
+  if (!s.healthy) {
+    ++unhealthy_state_count_;
+  }
+  if (state_count_ > 0 &&
+      s.tracking_health_status != last_tracking_health_status_) {
+    ++tracking_health_transition_count_;
+  }
+  last_tracking_health_status_ = s.tracking_health_status;
   ++state_count_;
   state_ << std::setprecision(17) << s.timestamp << ',' << s.position_world_m.x
          << ',' << s.position_world_m.y << ',' << s.position_world_m.z << ','
@@ -174,8 +220,36 @@ bool RunWriter::write_state(const EstimatorState &s, std::string *error) {
       state_ << ",NA";
     }
   }
-  state_ << ',' << (s.initialized ? 1 : 0) << ',' << (s.healthy ? 1 : 0)
+  state_ << ',' << s.msckf_update_features << ','
+         << s.msckf_candidate_features << ','
+         << s.msckf_accepted_features << ',';
+  if (s.msckf_update_quality_available) {
+    state_ << s.msckf_acceptance_ratio << ','
+           << s.msckf_update_age_s;
+  } else {
+    state_ << "NA,NA";
+  }
+  state_ << ',' << s.slam_features << ','
+         << s.visual_support_features << ','
+         << tracking_health_status_name(s.tracking_health_status) << ','
+         << s.tracking_health_good_duration_s << ','
+         << s.tracking_health_bad_duration_s << ','
+         << (s.tracking_health_gate_enabled ? 1 : 0) << ','
+         << s.camera_imu_time_offset_s << ',';
+  if (s.camera_imu_time_offset_variance_available) {
+    state_ << std::sqrt(s.camera_imu_time_offset_variance_s2);
+  } else {
+    state_ << "NA";
+  }
+  state_ << ',' << (s.camera_imu_time_offset_online ? 1 : 0) << ','
+         << (s.initialized ? 1 : 0) << ',' << (s.healthy ? 1 : 0)
          << ',' << s.processing_latency_ms << '\n';
+  last_camera_imu_time_offset_s_ = s.camera_imu_time_offset_s;
+  last_camera_imu_time_offset_variance_s2_ =
+      s.camera_imu_time_offset_variance_s2;
+  last_camera_imu_time_offset_online_ = s.camera_imu_time_offset_online;
+  last_camera_imu_time_offset_variance_available_ =
+      s.camera_imu_time_offset_variance_available;
   if (!trajectory_ || !state_) {
     if (error) {
       *error = "failed to write trajectory or state output";
@@ -197,6 +271,18 @@ bool RunWriter::write_diagnostics(const DiagnosticsSnapshot &d,
     }
     return false;
   }
+  if (d.msckf_update_quality_available &&
+      (!std::isfinite(d.msckf_acceptance_ratio) ||
+       !std::isfinite(d.msckf_update_age_s) ||
+       d.msckf_acceptance_ratio < 0.0 ||
+       d.msckf_acceptance_ratio > 1.0 ||
+       d.msckf_update_age_s < 0.0 ||
+       d.msckf_accepted_features > d.msckf_candidate_features)) {
+    if (error) {
+      *error = "refusing to serialize invalid MSCKF diagnostics";
+    }
+    return false;
+  }
   diagnostics_ << std::setprecision(17) << d.timestamp << ','
                << d.received_camera_frames << ',' << d.valid_stereo_pairs
                << ',' << d.received_gyro_samples << ','
@@ -206,6 +292,17 @@ bool RunWriter::write_diagnostics(const DiagnosticsSnapshot &d,
                << d.camera_queue_depth << ',' << d.camera_rate_hz << ','
                << d.imu_rate_hz << ',' << d.estimator_rate_hz << ','
                << d.processing_latency_ms << ',' << (d.initialized ? 1 : 0)
+               << ',' << (d.healthy ? 1 : 0) << ','
+               << d.msckf_candidate_features << ','
+               << d.msckf_accepted_features << ',';
+  if (d.msckf_update_quality_available) {
+    diagnostics_ << d.msckf_acceptance_ratio << ','
+                 << d.msckf_update_age_s;
+  } else {
+    diagnostics_ << "NA,NA";
+  }
+  diagnostics_ << ',' << d.visual_support_features << ','
+               << tracking_health_status_name(d.tracking_health_status)
                << '\n';
   if (!diagnostics_ && error) {
     *error = "failed to write diagnostics.csv";
@@ -252,7 +349,23 @@ bool RunWriter::close_locked(std::string *error) {
           << "summary.average_processing_latency_ms="
           << latency_sum_ms_ / static_cast<double>(state_count_) << '\n'
           << "summary.maximum_processing_latency_ms=" << latency_max_ms_
+          << '\n'
+          << "summary.unhealthy_state_count=" << unhealthy_state_count_
+          << '\n'
+          << "summary.tracking_health_transition_count="
+          << tracking_health_transition_count_ << '\n'
+          << "summary.final_tracking_health_status="
+          << tracking_health_status_name(last_tracking_health_status_) << '\n'
+          << "summary.final_camera_imu_time_offset_s="
+          << last_camera_imu_time_offset_s_ << '\n'
+          << "summary.camera_imu_time_offset_online="
+          << (last_camera_imu_time_offset_online_ ? "true" : "false")
           << '\n';
+      if (last_camera_imu_time_offset_variance_available_) {
+        application_log_
+            << "summary.final_camera_imu_time_offset_std_s="
+            << std::sqrt(last_camera_imu_time_offset_variance_s2_) << '\n';
+      }
     }
     application_log_ << "summary.nonfinite_states_rejected="
                      << rejected_nonfinite_states_ << '\n';

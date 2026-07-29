@@ -40,11 +40,61 @@ Shutdown order is capture stop, synchronizer stop, dispatcher drain/join, file
 flush/close. A callback exception is recorded as a fatal diagnostic rather than
 crossing the C callback boundary.
 
+The project-owned tracking-health gate runs after OpenVINS state extraction.
+It records the current camera-0 frontend track count as
+`visual_support_features`. Persistent SLAM landmarks that were not observed
+in that frame do not inflate this count, while a current track does not need
+triangulated depth merely to report frontend continuity. Time hysteresis
+prevents a single weak or strong frame from flipping status: the selected
+runtime requires at least 12 support features for 1.5 consecutive seconds to
+become `HEALTHY`, and marks the state `DEGRADED` after one consecutive second
+below that threshold. A three-second warm-up timeout also rejects flickering
+support that never becomes stable. A camera gap over 0.5 seconds resets the
+gate to `WARMING_UP`.
+
+The gate is observational only. It never modifies pose, velocity, covariance,
+feature tracks, ZUPT behavior, or OpenVINS internals. `healthy=false` therefore
+means the pose must not be trusted for accuracy, while `healthy=true` means
+only that numerical validity and the configured minimum visual-support
+contract passed. It is not ground truth and cannot detect every geometrically
+wrong but internally accepted feature update.
+
+For deeper diagnosis, the local OpenVINS patch also exposes read-only
+statistics for the latest non-empty MSCKF batch. OVRS records the number of
+candidate features before the updater, the number remaining after
+triangulation, refinement, and chi-square rejection, their ratio, and the age
+of that batch. These fields make `80 frontend tracks but 0/16 accepted MSCKF
+features` visible instead of presenting both situations as equivalent.
+
+MSCKF acceptance is intentionally not folded into the binary health gate.
+Accepted-update ratios are event-driven, depend on motion and marginalization,
+and can be low during legitimate stationary or weak-parallax intervals. The
+two marked-pose replays showed different aggregate ratios but overlapping
+short-window distributions, so a universal pass threshold would be fabricated.
+The ratio is evidence for diagnosis, not ground truth.
+
 `LiveViewer` is opt-in. The capture/dispatcher threads publish only
 reference-counted owned image buffers and copied estimator states behind a
 mutex. The application main thread alone calls OpenCV HighGUI. Trajectory
 history has a configurable bound, window closure requests the same clean
 shutdown path as Ctrl+C, and headless operation does not create a window.
+Its view-controller math remains in `ovrs_core`, independent of OpenCV, so
+orbit, pan, cursor-centred zoom, fit, and reset behavior are deterministic and
+unit-tested. HighGUI owns only mouse/key delivery and rendering. The displayed
+ground grid and XYZ axes are in the estimator global frame; they do not add an
+absolute reference or change estimator state. The default viewer camera draws
+positive global Z upward on screen and the X/Y plane receding downward, but
+this is only a projection convention. Serialized state remains native
+OpenVINS: its configured gravity vector is `(0, 0, +gravity_mag)`, and OVRS
+does not silently convert it to ENU, NED, FLU, or FRD.
+Both viewer windows label the current visual-support state and feature count;
+the trajectory window also shows accepted/candidate MSCKF counts and ratio.
+Weak support is red. The complete status and hysteresis durations remain
+recorded even when the viewer is disabled. The trajectory origin is the first
+pose whose visual-support state is `HEALTHY`, not an untrusted warm-up
+estimate. Later movement away from that axis is drawn unchanged, including
+drift or degraded states, and its path/displacement labels explicitly remain
+estimates.
 
 `RunWriter` serializes state, diagnostics, metadata log, close, and finalize
 operations. This is required because live state output originates on the
@@ -62,7 +112,7 @@ OpenVINS is built from its `ov_msckf` directory with `ENABLE_ROS=OFF` and
 disabled as well. Ubuntu 24.04 uses repository-local Ceres 2.1.0 because
 OpenVINS v2.7 still uses `LocalParameterization`.
 
-librealsense v2.56.5 is pinned because its release line explicitly includes
+librealsense v2.57.3 is pinned because its release line explicitly includes
 Ubuntu 24.04. The official package route is acceptable when the exact version
 is available. The repository-local RSUSB build is the fallback and does not
 patch kernel modules.

@@ -208,6 +208,20 @@ stream_motion_correction="$(
     's/^[[:space:]]*motion_correction_enabled:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' \
     "${stream_config_path}"
 )"
+global_time_count="$(
+  grep -Ec \
+    '^[[:space:]]*global_time_enabled:[[:space:]]*(true|false)[[:space:]]*$' \
+    "${stream_config_path}" || true
+)"
+if [[ "${global_time_count}" -ne 1 ]]; then
+  echo "Stream configuration requires exactly one boolean global_time_enabled entry." >&2
+  exit 2
+fi
+stream_global_time="$(
+  sed -n \
+    's/^[[:space:]]*global_time_enabled:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' \
+    "${stream_config_path}"
+)"
 
 mapfile -t realsense_models < <(
   sed -n \
@@ -339,9 +353,19 @@ imu_motion_correction="$(
     's/^[[:space:]]*realsense_motion_correction_enabled:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' \
     "${imu_template}"
 )"
+imu_global_time="$(
+  sed -n \
+    's/^[[:space:]]*realsense_global_time_enabled:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' \
+    "${imu_template}"
+)"
 if [[ -z "${imu_motion_correction}" ||
       "${imu_motion_correction}" != "${stream_motion_correction}" ]]; then
   echo "Stream and bootstrap IMU motion-correction policies do not match." >&2
+  exit 2
+fi
+if [[ -z "${imu_global_time}" ||
+      "${imu_global_time}" != "${stream_global_time}" ]]; then
+  echo "Stream and bootstrap IMU timestamp policies do not match." >&2
   exit 2
 fi
 placeholder='calibrated_serial: "REPLACE_WITH_DEVICE_SERIAL"'

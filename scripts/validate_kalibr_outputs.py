@@ -13,6 +13,7 @@ from typing import Any
 
 from calibration_common import (  # noqa: E402
     CalibrationError,
+    export_global_time_enabled,
     finite_float,
     read_text,
     sha256_file,
@@ -81,7 +82,10 @@ def parser() -> argparse.ArgumentParser:
         "--matrix-tolerance",
         type=float,
         default=1e-6,
-        help="numeric tolerance for rigid-transform and zero-matrix checks",
+        help=(
+            "numeric tolerance for rigid transforms, rotations, triangular "
+            "structure, and the Kalibr-to-OpenVINS Tg mapping"
+        ),
     )
     return result
 
@@ -122,6 +126,40 @@ def determinant3(matrix: list[list[float]]) -> float:
         + matrix[0][2]
         * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
     )
+
+
+def matrix_multiply(
+    left: list[list[float]], right: list[list[float]]
+) -> list[list[float]]:
+    return [
+        [
+            sum(left[row][index] * right[index][column] for index in range(3))
+            for column in range(3)
+        ]
+        for row in range(3)
+    ]
+
+
+def max_abs_difference(
+    left: list[list[float]], right: list[list[float]]
+) -> float:
+    return max(
+        abs(left[row][column] - right[row][column])
+        for row in range(3)
+        for column in range(3)
+    )
+
+
+def validate_lower_triangular(
+    matrix: list[list[float]], field: str, tolerance: float
+) -> None:
+    for row, column in ((0, 1), (0, 2), (1, 2)):
+        if abs(matrix[row][column]) > tolerance:
+            raise CalibrationError(
+                f"{field} must use Kalibr's lower-triangular model"
+            )
+    if any(matrix[index][index] <= 0.0 for index in range(3)):
+        raise CalibrationError(f"{field} diagonal entries must be positive")
 
 
 def validate_rotation(matrix: list[list[float]], field: str, tolerance: float) -> None:
@@ -197,8 +235,9 @@ def validate_imu(
     document: dict[str, Any],
     expected_rate: int,
     motion_correction_active: bool,
+    global_time_enabled: bool,
     tolerance: float,
-) -> None:
+) -> dict[str, float]:
     imu = require_mapping(document.get("imu0"), "imu0")
     if imu.get("allan_sample_status") != "CHARACTERIZATION_CANDIDATE":
         raise CalibrationError(
@@ -210,6 +249,24 @@ def validate_imu(
             "imu0.imu_intrinsic_status must be MULTI_ORIENTATION_REVIEWED; "
             "active RealSense motion correction alone does not validate "
             "identity IMU intrinsic matrices"
+        )
+    if imu.get("imu_intrinsic_method") != "KALIBR_SCALE_MISALIGNMENT":
+        raise CalibrationError(
+            "imu0.imu_intrinsic_method must be "
+            "KALIBR_SCALE_MISALIGNMENT"
+        )
+    if imu.get("imu_intrinsic_mapping") != (
+        "ovrs-kalibr-openvins-imu-v1"
+    ):
+        raise CalibrationError(
+            "imu0.imu_intrinsic_mapping is unsupported"
+        )
+    intrinsic_hash = imu.get("imu_intrinsic_source_sha256")
+    if not isinstance(intrinsic_hash, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", intrinsic_hash
+    ):
+        raise CalibrationError(
+            "imu0.imu_intrinsic_source_sha256 must be a SHA-256 digest"
         )
     if imu.get("model") != "kalibr":
         raise CalibrationError("imu0.model must be kalibr")
@@ -235,15 +292,63 @@ def validate_imu(
         raise CalibrationError(
             "IMU YAML motion-correction policy does not match capture"
         )
+    declared_global_time = imu.get("realsense_global_time_enabled")
+    if not isinstance(declared_global_time, bool):
+        raise CalibrationError(
+            "imu0.realsense_global_time_enabled must be boolean"
+        )
+    if declared_global_time != global_time_enabled:
+        raise CalibrationError(
+            "IMU YAML timestamp policy does not match capture"
+        )
     validate_transform(imu.get("T_i_b"), "imu0.T_i_b", tolerance)
-    for key in ("Tw", "R_IMUtoGYRO", "Ta", "R_IMUtoACC", "Tg"):
-        matrix = numeric_matrix(imu.get(key), 3, 3, f"imu0.{key}")
-        if key in ("Tw", "Ta") and abs(determinant3(matrix)) <= tolerance:
-            raise CalibrationError(
-                f"imu0.{key} must be nonsingular"
-            )
-        if key in ("R_IMUtoGYRO", "R_IMUtoACC"):
-            validate_rotation(matrix, f"imu0.{key}", tolerance)
+    tw = numeric_matrix(imu.get("Tw"), 3, 3, "imu0.Tw")
+    gyro_rotation = numeric_matrix(
+        imu.get("R_IMUtoGYRO"), 3, 3, "imu0.R_IMUtoGYRO"
+    )
+    ta = numeric_matrix(imu.get("Ta"), 3, 3, "imu0.Ta")
+    accel_rotation = numeric_matrix(
+        imu.get("R_IMUtoACC"), 3, 3, "imu0.R_IMUtoACC"
+    )
+    tg = numeric_matrix(imu.get("Tg"), 3, 3, "imu0.Tg")
+    kalibr_a = numeric_matrix(
+        imu.get("kalibr_gyroscope_A"),
+        3,
+        3,
+        "imu0.kalibr_gyroscope_A",
+    )
+    validate_lower_triangular(tw, "imu0.Tw", tolerance)
+    validate_lower_triangular(ta, "imu0.Ta", tolerance)
+    if abs(determinant3(tw)) <= tolerance:
+        raise CalibrationError("imu0.Tw must be nonsingular")
+    if abs(determinant3(ta)) <= tolerance:
+        raise CalibrationError("imu0.Ta must be nonsingular")
+    validate_rotation(gyro_rotation, "imu0.R_IMUtoGYRO", tolerance)
+    validate_rotation(accel_rotation, "imu0.R_IMUtoACC", tolerance)
+    identity3 = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+    if max_abs_difference(accel_rotation, identity3) > tolerance:
+        raise CalibrationError(
+            "imu0.R_IMUtoACC must be identity for the Kalibr model"
+        )
+    mapped_tg = matrix_multiply(kalibr_a, gyro_rotation)
+    mapping_error = max_abs_difference(tg, mapped_tg)
+    if mapping_error > tolerance:
+        raise CalibrationError(
+            "imu0.Tg does not equal kalibr_gyroscope_A * R_IMUtoGYRO"
+        )
+    return {
+        "tw_determinant": determinant3(tw),
+        "ta_determinant": determinant3(ta),
+        "gyro_rotation_determinant": determinant3(gyro_rotation),
+        "tg_mapping_error": mapping_error,
+        "tw_max_identity_deviation": max_abs_difference(tw, identity3),
+        "ta_max_identity_deviation": max_abs_difference(ta, identity3),
+        "tg_max_abs": max(abs(value) for row in tg for value in row),
+    }
 
 
 def file_fingerprint(path: Path) -> str:
@@ -288,6 +393,9 @@ def main() -> int:
                 "Kalibr camera-IMU review requires imu-camera-calibration capture"
             )
         validate_export_provenance(args.export_manifest, manifest)
+        global_time_enabled = export_global_time_enabled(
+            args.export_manifest, manifest
+        )
         expected_rate = int(manifest.get("gyro_rate_hz", "0"))
         if expected_rate <= 0:
             raise CalibrationError("export manifest gyro_rate_hz must be positive")
@@ -336,10 +444,11 @@ def main() -> int:
                 f"{disagreement_us:.9g} us exceeds operator limit "
                 f"{args.max_time_offset_disagreement_us:.9g} us"
             )
-        validate_imu(
+        imu_metrics = validate_imu(
             load_yaml(args.imu),
             expected_rate,
             motion_policy == "true",
+            global_time_enabled,
             args.matrix_tolerance,
         )
 
@@ -358,6 +467,21 @@ def main() -> int:
             (
                 "- operator-supplied disagreement limit: "
                 f"`{args.max_time_offset_disagreement_us:.12g} us`"
+            ),
+            f"- det(Tw): `{imu_metrics['tw_determinant']:.12g}`",
+            f"- det(Ta): `{imu_metrics['ta_determinant']:.12g}`",
+            (
+                "- max |Tw-I|: "
+                f"`{imu_metrics['tw_max_identity_deviation']:.12g}`"
+            ),
+            (
+                "- max |Ta-I|: "
+                f"`{imu_metrics['ta_max_identity_deviation']:.12g}`"
+            ),
+            f"- max |Tg|: `{imu_metrics['tg_max_abs']:.12g}`",
+            (
+                "- max |Tg-A*C_gyro_i|: "
+                f"`{imu_metrics['tg_mapping_error']:.12g}`"
             ),
             "",
             "## Provenance",
@@ -378,6 +502,10 @@ def main() -> int:
             "- [ ] Camera reprojection residual plots were inspected.",
             "- [ ] IMU residuals and biases stay within reviewed 3-sigma bounds.",
             "- [ ] IMU timestamp-delta plots show no batching or gaps.",
+            (
+                "- [ ] IMU scale/misalignment and g-sensitivity estimates "
+                "were repeatable and physically plausible."
+            ),
             "- [ ] AprilGrid dimensions match the printed target measurements.",
             "- [ ] Transform directions and physical stereo baseline were checked.",
             "- [ ] Camera-to-IMU time-offset sign was checked.",

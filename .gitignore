@@ -4,7 +4,22 @@
 /runs/
 /output/
 /calibration/
-/config/local/
+# Serial-specific working files stay local. A reviewed selected_runtime bundle
+# is the only publishable exception so a fresh clone can reproduce the
+# documented runtime without carrying raw calibration captures or candidates.
+/config/local/*
+!/config/local/d435i-*/
+/config/local/d435i-*/*
+!/config/local/d435i-*/selected_runtime/
+/config/local/d435i-*/selected_runtime/*
+!/config/local/d435i-*/selected_runtime/*.yaml
+# Local outputs from Intel's EEPROM-writing IMU calibration utility. The
+# repository does not support or vendor that device-modifying workflow.
+/calibration.bin
+/calibration.json
+/rs-imu-calibration-fixed.py
+/.agents/
+/.codex/
 /.cache/
 /.venv/
 .idea/

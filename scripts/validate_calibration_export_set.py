@@ -10,6 +10,7 @@ from pathlib import Path
 
 from calibration_common import (
     CalibrationError,
+    export_global_time_enabled,
     iter_csv_rows,
     parse_bool,
     parse_nonnegative_int,
@@ -246,7 +247,10 @@ def write_report(
     infrared_profile: str,
     gyro_rate_hz: str,
     accelerometer_rate_hz: str,
+    gyro_sensitivity: str | None,
+    gyro_scale_factor: str | None,
     target_sha256: str,
+    global_time_enabled: bool,
     manifests: list[tuple[str, Path, dict[str, str]]],
 ) -> None:
     if output.exists():
@@ -269,8 +273,13 @@ def write_report(
         f"gyro_rate_hz: {gyro_rate_hz}",
         f"accelerometer_rate_hz: {accelerometer_rate_hz}",
         "motion_correction_active: true",
+        f"global_time_enabled: {str(global_time_enabled).lower()}",
         f"source_calibration_target_sha256: {yaml_quote(target_sha256)}",
     ]
+    if gyro_sensitivity is not None:
+        lines.append(f"gyro_sensitivity: {gyro_sensitivity}")
+    if gyro_scale_factor is not None:
+        lines.append(f"gyro_scale_factor: {gyro_scale_factor}")
     lines.extend(f"{key}: {yaml_quote(value)}" for key, value in hashes.items())
     try:
         with output.open("x", encoding="utf-8", newline="\n") as handle:
@@ -294,6 +303,19 @@ def main() -> int:
             ("stereo", stereo_path, stereo),
             ("imu_camera", imucam_path, imucam),
         ]
+        timestamp_policies = {
+            label: export_global_time_enabled(path, manifest)
+            for label, path, manifest in manifests
+        }
+        if len(set(timestamp_policies.values())) != 1:
+            details = ", ".join(
+                f"{label}={'Global Time' if enabled else 'Hardware Clock'}"
+                for label, enabled in timestamp_policies.items()
+            )
+            raise CalibrationError(
+                f"exports disagree on timestamp policy: {details}"
+            )
+        global_time_enabled = next(iter(timestamp_policies.values()))
 
         serial = require_equal(manifests, "calibrated_serial")
         infrared_profile = require_equal(
@@ -344,6 +366,64 @@ def main() -> int:
         require_positive(allan, "gyro_rate_hz", allan_path)
         require_positive(allan, "accelerometer_rate_hz", allan_path)
 
+        sensitivity_values = [
+            ("allan", allan.get("gyro_sensitivity", "")),
+            ("imu_camera", imucam.get("gyro_sensitivity", "")),
+        ]
+        if any(value for _, value in sensitivity_values):
+            if any(not value for _, value in sensitivity_values):
+                missing = ", ".join(
+                    label for label, value in sensitivity_values if not value
+                )
+                raise CalibrationError(
+                    f"missing gyro_sensitivity in: {missing}"
+                )
+            gyro_sensitivity = require_equal(
+                [
+                    ("allan", allan_path, allan),
+                    ("imu_camera", imucam_path, imucam),
+                ],
+                "gyro_sensitivity",
+            )
+            parsed_sensitivity = parse_nonnegative_int(
+                gyro_sensitivity, "gyro_sensitivity"
+            )
+            if parsed_sensitivity > 4:
+                raise CalibrationError(
+                    "gyro_sensitivity must be an index in [0,4]"
+                )
+        else:
+            gyro_sensitivity = None
+
+        scale_values = [
+            ("allan", allan.get("gyro_scale_factor", "")),
+            ("imu_camera", imucam.get("gyro_scale_factor", "")),
+        ]
+        if any(value for _, value in scale_values):
+            if any(not value for _, value in scale_values):
+                missing = ", ".join(
+                    label for label, value in scale_values if not value
+                )
+                raise CalibrationError(
+                    f"missing gyro_scale_factor in: {missing}"
+                )
+            gyro_scale_factor = require_equal(
+                [
+                    ("allan", allan_path, allan),
+                    ("imu_camera", imucam_path, imucam),
+                ],
+                "gyro_scale_factor",
+            )
+            parsed_scale = finite_decimal(
+                gyro_scale_factor, "gyro_scale_factor"
+            )
+            if parsed_scale <= 0 or parsed_scale > 100:
+                raise CalibrationError(
+                    "gyro_scale_factor must be in (0,100]"
+                )
+        else:
+            gyro_scale_factor = None
+
         target_sha = require_equal(
             [
                 ("stereo", stereo_path, stereo),
@@ -357,12 +437,19 @@ def main() -> int:
             infrared_profile,
             gyro_rate,
             accel_rate,
+            gyro_sensitivity,
+            gyro_scale_factor,
             target_sha,
+            global_time_enabled,
             manifests,
         )
         print("calibration export set: PASS")
         print(f"serial: {serial}")
         print(f"infrared_profile: {infrared_profile}")
+        print(
+            "timestamp_policy: "
+            + ("Global Time" if global_time_enabled else "Hardware Clock")
+        )
         print(f"report: {args.output_report}")
         return 0
     except (CalibrationError, OSError) as exc:

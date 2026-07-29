@@ -4,6 +4,112 @@ The repository did not previously contain release tags or a changelog. The
 entries below document the actual development milestones represented by the
 current tree; they must not be read as claims that historical Git tags exist.
 
+## Unreleased
+
+- Made reviewed `selected_runtime` YAML bundles publishable while keeping raw
+  calibration captures, factory exports, and candidate bundles ignored.
+  Repository checks now reject an ignored selected runtime.
+- Rewrote the root README in plain English and added project/stack badges, the
+  GPLv3 and author details, and a clickable live-viewer guide. The complete
+  calibration procedure moved to `docs/operator_runbook.md`, historical audit
+  detail moved to `docs/audit_history.md`, and mathematical notation moved to
+  a focused GitHub-renderable document using `$...$` inline delimiters.
+- Moved the 1,099-line inline implementation out of
+  `include/ovrs/app_support.hpp` into `src/app_support.cpp`. CLI and test users
+  now include YAML parsing declarations explicitly instead of relying on a
+  transitive implementation header.
+- Added output-only MSCKF batch-quality provenance: candidate count, accepted
+  count after triangulation/refinement/chi-square rejection, acceptance ratio,
+  and age of the last non-empty batch. Two identical-data replays remained
+  byte-identical to their earlier trajectories. The metric is intentionally
+  not a new pass/fail gate because accepted-ratio distributions overlapped and
+  no defensible universal threshold was established.
+- Centralized selected-runtime hash verification in
+  `scripts/verify_selected_runtime.sh`, removed personal checkout paths from
+  documentation, ignored local EEPROM-tool outputs without deleting them, and
+  added repository checks for personal paths and Bash-block syntax.
+- Added a project-owned visual tracking-health gate with time hysteresis and a
+  bounded warm-up. Its support count uses current-frame camera-0 frontend
+  tracks, not persistent unobserved SLAM landmarks. A minimal read-only
+  `VioManager` accessor exposes that count without changing the tracker or
+  filter. Live and replay record support, status, transition evidence, and
+  resolved thresholds; both viewer windows show weak support in red. The gate
+  is output-only and never rewrites OpenVINS pose, covariance, features, or
+  ZUPT state.
+- Replaced the selected serial's former `gyro_scale_factor: 0.5` with `1.0`
+  after official EEPROM IMU recalibration. On one identical 50.44-second raw
+  capture, `0.5` reached the 3 m/s safety gate while `1.0` completed with
+  0.0588 m final displacement and 0.0065 m/s final speed. A connected
+  131-second `1.0` live run then completed without runaway, but retained about
+  0.62 m endpoint error beyond the operator-reported physical translation, so
+  the runtime remains diagnostic rather than drift-safe.
+- Invalidated the earlier selected-runtime acceptance after clean-transport
+  pitch-motion runs reproduced metres of false translation. The historical
+  57.83 s replay ended slowly only after accumulating 60.893 m path and 10.677
+  m final displacement; stop recovery is now documented as a final-velocity
+  constraint, not a position-drift fix. Debug replay also captured the
+  collapse of usable MSCKF update features after motion.
+- Added explicit, fail-closed D435i gyro-sensitivity and project gyro-scale
+  acquisition contracts. Motion start sets and reads back SDK/FW sensitivity;
+  the selected serial now applies `gyro_scale_factor: 1.0` before recording
+  and synchronization. Stream, device, dataset, and calibration-export
+  provenance must agree. Replay never silently rescales historical data; the
+  earlier `0.5` evidence remains preserved as rejected history.
+- Preserved and diagnosed clean-transport moving captures at sensitivity
+  levels 1 and 0. Twelve strong level-0 windows had median gyro/visual ratio
+  2.017 and mean 1.993. A native corrected hardware capture recorded 5388
+  stereo pairs and 11982 synchronized IMU rows with zero integrity errors;
+  representative corrected visual/gyro rotations agreed at 13.667/13.931 and
+  11.869/11.683 degrees.
+- Fixed the reviewed continuous-ZUPT duration gate. Normal MSCKF cleanup made
+  its former interval-wide feature lookup return zero tracks, so post-motion
+  recovery was unreachable. The selected policy now requires one second of
+  consecutive low-disparity frames with more than 20 common features. It can
+  constrain final velocity but does not make the trajectory drift-safe.
+- Added a dedicated 848x480 Y8 stereo 90 Hz VIO stream profile while retaining
+  the 30 Hz calibration profile. A connected D435i capture completed with zero
+  transport integrity errors; replay completed 87.83 seconds without the
+  earlier recorded fast-motion runaway and remained within 4.2 mm over its
+  final 17.8-second stationary segment. A subsequent connected live 90 Hz
+  motion still reached the 3 m/s gate with clean transport, so fast-motion
+  acceptance remains failed. These runs have no external trajectory ground
+  truth and are not an accuracy certification.
+- Replay now validates and reports a leading stereo prefix that predates the
+  first synchronized IMU sample, then begins at the first covered stereo pair.
+  It does not shift timestamps, synthesize IMU, or tolerate a later missing
+  bracket.
+- Replaced the fixed isometric trajectory panel with an interactive global XYZ
+  viewer: left-drag orbit, middle/right-drag pan, cursor-centred wheel zoom,
+  explicit fit/reset controls, a world-locked ground grid, compact labelled
+  axes, start/current markers, resizable aspect ratio, and live
+  path/displacement metrics. New states no longer silently re-centre or
+  rescale the world. View-controller math is dependency-light and covered by
+  core regression tests.
+- Added an explicit selected-runtime reproduction protocol and controlled
+  diagnostic live-viewer guidance. It binds each run to the exact hashes,
+  serial, fixed time-offset/ZUPT policy, controlled
+  stationary/smooth-motion sequence, replay-first physical bounds, and the
+  known fast-motion limit.
+- Raised the exact librealsense pin from v2.56.5 to v2.57.3 after a physical
+  D435i with a newly written official IMU calibration table opened four
+  streams but delivered no frames through v2.56.5. The same device delivered
+  frames through v2.57.3; the pin remains tag-and-commit verified.
+- Selected the serial-specific post-update Kalibr candidate A as the current
+  local runtime for D435i `843212070146`. Runtime keeps its fixed
+  -4.900203074 ms offset, disables online time-offset estimation, and uses the
+  reviewed visually gated stop recovery. The bundle remains
+  `BOOTSTRAP_UNVERIFIED`; selection is not strict calibration promotion.
+- Added a single ready-to-run README path and a selected-runtime evidence
+  contract. Factory bootstrap, candidate B, online-offset results, and
+  the earlier broken continuous-ZUPT trials are retained as diagnostic
+  evidence, not interchangeable operator configurations. The fixed,
+  visually-gated one-second stop recovery is the selected policy.
+- Recorded the connected-camera limit honestly: stationary and smooth-motion
+  behaviour improved materially with zero transport drops, while sufficiently
+  fast handheld motion can still produce a physically inconsistent
+  trajectory. Numeric health and clean transport are not presented as
+  accuracy proof.
+
 ## v0.5.2 - 2026-07-27
 
 - Added a fail-closed three-export coherence validator. It rejects mixed

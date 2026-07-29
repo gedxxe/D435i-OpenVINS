@@ -1,5 +1,9 @@
 # Development environments observed through 2026-07-26
 
+> Historical evidence only. This file preserves build/environment observations
+> and is not an operator startup guide. The current serial-specific runtime
+> choice and command are in [selected_runtime.md](selected_runtime.md).
+
 The repository was initially created and statically audited in a Windows 11
 desktop session:
 

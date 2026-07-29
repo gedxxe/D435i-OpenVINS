@@ -5,6 +5,7 @@
 #include "ovrs/imu_synchronizer.hpp"
 #include "ovrs/realsense_source.hpp"
 #include "ovrs/stereo_capture_preview.hpp"
+#include "ovrs/yaml_utils.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -34,9 +35,12 @@ void help() {
                "                   [--width PIXELS --height PIXELS "
                "--camera-fps HZ]\n"
                "                   [--gyro-fps HZ --accel-fps HZ]\n"
+               "                   [--gyro-sensitivity 0..4]\n"
+               "                   [--gyro-scale-factor FACTOR]\n"
                "                   [--emitter on|off] "
                "[--auto-exposure on|off]\n"
                "                   [--motion-correction on|off]\n"
+               "                   [--global-time on|off]\n"
                "                   [--imu-queue COUNT --stereo-queue COUNT]\n"
                "                   [--stereo-tolerance-ms MILLISECONDS]\n"
                "                   [--version]\n"
@@ -546,12 +550,21 @@ int main(int argc, char **argv) {
         "\"\ngyro_rate_hz: " +
         ovrs::simple_yaml_scalar(source.device_report_yaml(),
                                  "gyro_rate_hz") +
+        "\ngyro_sensitivity_active: " +
+        ovrs::simple_yaml_scalar(source.device_report_yaml(),
+                                 "gyro_sensitivity_active") +
+        "\ngyro_scale_factor_applied: " +
+        ovrs::simple_yaml_scalar(source.device_report_yaml(),
+                                 "gyro_scale_factor_applied") +
         "\naccelerometer_rate_hz: " +
         ovrs::simple_yaml_scalar(source.device_report_yaml(),
                                  "accelerometer_rate_hz") +
         "\nmotion_correction_active: " +
         ovrs::simple_yaml_scalar(source.device_report_yaml(),
                                  "motion_correction_active") +
+        "\nglobal_time_active: " +
+        ovrs::simple_yaml_scalar(source.device_report_yaml(),
+                                 "global_time_active") +
         "\n";
     if (!ovrs::write_text(
             root / "recording_summary.yaml",

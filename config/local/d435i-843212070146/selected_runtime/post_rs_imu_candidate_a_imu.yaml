@@ -1,0 +1,48 @@
+%YAML:1.0
+# Allan noise weighting plus the official RealSense device calibration policy.
+# Librealsense applies the device table, so OpenVINS must not apply another
+# scale/misalignment correction.
+calibration_state: "BOOTSTRAP_UNVERIFIED"
+calibrated_serial: "843212070146"
+
+imu0:
+  realsense_motion_correction_enabled: true
+  realsense_global_time_enabled: true
+  imu_intrinsic_method: "REALSENSE_DEVICE_TABLE_WITH_SDK_CORRECTION"
+  imu_intrinsic_status: "POST_WRITE_READBACK_MATCHED_EXPERIMENTAL"
+  official_calibration_json_sha256: "f19e0a629b954b9addb77e217b3b470685508b33e70677abf906b4cc61580e63"
+  official_calibration_binary_sha256: "128415c6e9f96ac0de1fe525a32c4f6df43e43925434ead2d06431b218b1cdbc"
+  device_report_sha256: "992129d94741ccf0275db9430c4fe6d4608530ac20e47d5ca72905e45bd623e2"
+  allan_sample_status: "PRE_DEVICE_UPDATE_CHARACTERIZATION_CANDIDATE"
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  accelerometer_noise_density: 0.0016168220203237752
+  accelerometer_random_walk: 0.00016847400007362096
+  gyroscope_noise_density: 0.00015262753525437838
+  gyroscope_random_walk: 4.696995584209659e-06
+  time_offset: 0.0
+  update_rate: 200
+  model: "kalibr"
+  Tw:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  R_IMUtoGYRO:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  Ta:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  R_IMUtoACC:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  Tg:
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]

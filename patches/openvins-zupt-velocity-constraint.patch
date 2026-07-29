@@ -1,8 +1,8 @@
 diff --git a/ov_msckf/src/core/VioManager.cpp b/ov_msckf/src/core/VioManager.cpp
-index 6a0d7b9..e490196 100644
+index 6a0d7b9..9b0d1d1 100644
 --- a/ov_msckf/src/core/VioManager.cpp
 +++ b/ov_msckf/src/core/VioManager.cpp
-@@ -159,7 +159,9 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
+@@ -159,10 +159,18 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
    if (params.try_zupt) {
      updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
                                                          propagator, params.gravity_mag, params.zupt_max_velocity,
@@ -13,7 +13,16 @@ index 6a0d7b9..e490196 100644
    }
  }
  
-@@ -206,7 +208,9 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
++size_t VioManager::get_active_track_count(size_t camera_id) {
++  const auto last_ids = trackFEATS->get_last_ids();
++  const auto found = last_ids.find(camera_id);
++  return found == last_ids.end() ? 0 : found->second.size();
++}
++
+ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
+ 
+   // The oldest time we need IMU with is the last clone
+@@ -206,7 +214,9 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
      if (params.try_zupt) {
        updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
                                                            propagator, params.gravity_mag, params.zupt_max_velocity,
@@ -24,6 +33,62 @@ index 6a0d7b9..e490196 100644
      }
      PRINT_WARNING(RED "[SIM]: casting our tracker to a TrackSIM object!\n" RESET);
    }
+@@ -522,7 +532,13 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
+   // NOTE: this should only really be used if you want to track a lot of features, or have limited computational resources
+   if ((int)featsup_MSCKF.size() > state->_options.max_msckf_in_update)
+     featsup_MSCKF.erase(featsup_MSCKF.begin(), featsup_MSCKF.end() - state->_options.max_msckf_in_update);
++  const size_t msckf_candidate_features = featsup_MSCKF.size();
+   updaterMSCKF->update(state, featsup_MSCKF);
++  if (msckf_candidate_features > 0) {
++    last_msckf_update_stats.timestamp = message.timestamp;
++    last_msckf_update_stats.candidate_features = msckf_candidate_features;
++    last_msckf_update_stats.accepted_features = featsup_MSCKF.size();
++  }
+   propagator->invalidate_cache();
+   rT4 = boost::posix_time::microsec_clock::local_time();
+ 
+diff --git a/ov_msckf/src/core/VioManager.h b/ov_msckf/src/core/VioManager.h
+index 3fd7089..4b075a7 100644
+--- a/ov_msckf/src/core/VioManager.h
++++ b/ov_msckf/src/core/VioManager.h
+@@ -52,6 +52,12 @@ class UpdaterSLAM;
+ class UpdaterZeroVelocity;
+ class Propagator;
+ 
++struct MsckfUpdateStats {
++  double timestamp = -1.0;
++  size_t candidate_features = 0;
++  size_t accepted_features = 0;
++};
++
+ /**
+  * @brief Core class that manages the entire system
+  *
+@@ -122,6 +128,14 @@ public:
+   /// Returns 3d features used in the last update in global frame
+   std::vector<Eigen::Vector3d> get_good_features_MSCKF() { return good_features_MSCKF; }
+ 
++  /// Returns the number of frontend tracks in the current frame for one camera
++  size_t get_active_track_count(size_t camera_id);
++
++  /// Returns candidate/accepted counts for the latest non-empty MSCKF batch
++  MsckfUpdateStats get_last_msckf_update_stats() const {
++    return last_msckf_update_stats;
++  }
++
+   /// Return the image used when projecting the active tracks
+   void get_active_image(double &timestamp, cv::Mat &image) {
+     timestamp = active_tracks_time;
+@@ -232,6 +246,9 @@ protected:
+   // Good features that where used in the last update (used in visualization)
+   std::vector<Eigen::Vector3d> good_features_MSCKF;
+ 
++  // Candidate/accepted counts for the latest non-empty MSCKF update batch
++  MsckfUpdateStats last_msckf_update_stats;
++
+   // Re-triangulated features 3d positions seen from the current frame (used in visualization)
+   // For each feature we have a linear system A * p_FinG = b we create and increment their costs
+   double active_tracks_time = -1;
 diff --git a/ov_msckf/src/core/VioManagerOptions.h b/ov_msckf/src/core/VioManagerOptions.h
 index 0df7d15..979e325 100644
 --- a/ov_msckf/src/core/VioManagerOptions.h
@@ -65,7 +130,7 @@ index 0df7d15..979e325 100644
      PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
    }
 diff --git a/ov_msckf/src/update/UpdaterZeroVelocity.cpp b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
-index 3c55846..e05b7fc 100644
+index 3c55846..e833e0b 100644
 --- a/ov_msckf/src/update/UpdaterZeroVelocity.cpp
 +++ b/ov_msckf/src/update/UpdaterZeroVelocity.cpp
 @@ -35,15 +35,26 @@
@@ -129,7 +194,7 @@ index 3c55846..e05b7fc 100644
    bool explicitly_enforce_zero_motion = false;
  
    // Order of our Jacobian
-@@ -215,30 +228,57 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+@@ -215,30 +228,48 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
      PRINT_WARNING(YELLOW "[ZUPT]: chi2_check over the residual limit - %d\n" RESET, (int)res.rows());
    }
  
@@ -177,23 +242,14 @@ index 3c55846..e05b7fc 100644
 +      last_zupt_state_timestamp = 0.0;
 +      last_zupt_count = 0;
 +      return false;
-+    }
-+
-+    int accumulated_features = 0;
-+    double accumulated_disparity = 0.0;
-+    double accumulated_variance = 0.0;
-+    FeatureHelper::compute_disparity(_db, stationary_candidate_timestamp, timestamp, accumulated_disparity,
-+                                     accumulated_variance, accumulated_features);
-+    visually_confirmed_stationary =
-+        accumulated_disparity < _zupt_max_disparity && accumulated_features > 20;
-+    if (!visually_confirmed_stationary) {
-+      stationary_candidate_timestamp = 0.0;
-+      last_zupt_state_timestamp = 0.0;
-+      last_zupt_count = 0;
-+      PRINT_DEBUG(YELLOW "[ZUPT]: rejected accumulated visual motion (%.3f px, %d features)\n" RESET,
-+                  accumulated_disparity, accumulated_features);
-+      return false;
      }
++
++    // Requiring one feature to survive for the entire stationary interval is
++    // not valid here: normal MSCKF updates may clean the observation at the
++    // interval's first timestamp before this duration gate is reached. The
++    // consecutive per-frame checks above already require more than 20 common
++    // tracks and reset the candidate on any moving or unknown frame.
++    visually_confirmed_stationary = true;
    }
  
    // Check if we are currently zero velocity
@@ -206,7 +262,7 @@ index 3c55846..e05b7fc 100644
      last_zupt_state_timestamp = 0.0;
      last_zupt_count = 0;
      PRINT_DEBUG(YELLOW "[ZUPT]: rejected |v_IinG| = %.3f (chi2 %.3f > %.3f)\n" RESET, state->_imu->vel().norm(), chi2,
-@@ -274,6 +314,19 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+@@ -274,6 +305,19 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
  
      // Finally move the state time forward
      StateHelper::EKFUpdate(state, Hx_order, H, res, R);
@@ -226,7 +282,7 @@ index 3c55846..e05b7fc 100644
      state->_timestamp = timestamp;
  
    } else {
-@@ -324,6 +377,11 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
+@@ -324,6 +368,11 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
    }
  
    // Finally return

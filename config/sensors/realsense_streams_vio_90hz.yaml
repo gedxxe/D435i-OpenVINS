@@ -1,0 +1,24 @@
+%YAML:1.0
+# Selected live/replay VIO stream policy. The higher stereo rate reduces
+# inter-frame motion and the exposure-time ceiling during fast handheld motion.
+# Keep the 30 Hz realsense_streams.yaml profile for calibration capture.
+width: 848
+height: 480
+camera_fps: 90
+gyro_fps: 200
+# Explicit SDK level 1 (30.5 mDeg/s per LSB, nominal +/-1000 deg/s).
+# This prevents an inherited/ambiguous dynamic-sensitivity state.
+gyro_sensitivity: 1
+# Use the SDK rad/s value directly. The former 0.5 factor was rejected after
+# the 2026-07-29 official EEPROM recalibration by identical-data replay A/B and
+# a connected 131-second live test.
+gyro_scale_factor: 1.0
+accelerometer_fps: 250
+emitter_enabled: false
+auto_exposure: true
+motion_correction_enabled: true
+global_time_enabled: true
+imu_queue_size: 4096
+stereo_queue_size: 32
+stereo_tolerance_ms: 2.0
+serial: ""

@@ -78,13 +78,16 @@ if(_ovrs_opencv_components)
 endif()
 
 add_library(ovrs_core
+  src/app_support.cpp
   src/capture_mode.cpp
   src/config.cpp
   src/imu_synchronizer.cpp
   src/measurement_dispatcher.cpp
   src/stereo_synchronizer.cpp
   src/timestamp_normalizer.cpp
+  src/tracking_health.cpp
   src/trajectory.cpp
+  src/trajectory_view.cpp
 )
 target_include_directories(ovrs_core PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")

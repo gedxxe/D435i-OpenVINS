@@ -4,13 +4,54 @@ This repository has three distinct calibration states:
 
 | State | Meaning | Estimation allowed by default |
 | --- | --- | --- |
-| `BOOTSTRAP_UNVERIFIED` | RealSense factory intrinsics/extrinsics plus conservative IMU placeholders | No |
+| `BOOTSTRAP_UNVERIFIED` | Serial-bound bundle that has not satisfied every strict promotion gate; this includes factory bootstrap and limited-evidence Kalibr candidates | No |
 | `UNVERIFIED_CAPTURE` / `UNVERIFIED_KALIBR_INPUT` | Validated evidence or intermediate files; external analysis/manual review incomplete | No |
 | `KALIBR_VERIFIED` | Serial-specific Kalibr/Allan results passed structural checks and explicit human review | Yes |
 
 Changing a state string is not calibration. Promotion is performed only by
 `scripts/prepare_verified_calibration.py`, which verifies source hashes and
 requires all review acknowledgements.
+
+## Current selected local runtime
+
+The selected runtime for D435i serial `843212070146` is:
+
+```text
+config/local/d435i-843212070146/selected_runtime/estimator.yaml
+```
+
+It uses repeat post-device-update Kalibr camera/camera-IMU results, the
+official RealSense IMU table through active librealsense motion correction,
+and Allan noise weighting. It is operationally selected over candidate B, but
+remains `BOOTSTRAP_UNVERIFIED` because the small AprilGrid, approximately
+3.19 mm translation repeatability, and pre-device-update Allan capture do not
+satisfy the strict promotion contract.
+
+Runtime policy is fixed and must remain consistent across live and replay:
+
+- fixed shared camera-IMU time offset: -4.900203074 ms;
+- `calib_cam_timeoffset: false` and `--online-time-offset off`;
+- visually gated continuous ZUPT with one second minimum stationary duration;
+- 848x480 Y8 stereo at 90 Hz for VIO, gyro 200 Hz, accelerometer 250 Hz;
+- dynamic gyro-sensitivity level 1 explicitly set before streaming and read
+  back after streaming starts;
+- serial-bound `gyro_scale_factor: 1.0`, applied before synchronization and
+  recorded in capture provenance; post-EEPROM-calibration identical-data A/B
+  rejected the former `0.5` selection;
+- RealSense motion correction and Global Time active.
+
+The separate 30 Hz profile remains the calibration acquisition contract. It
+uses the same gyro rate, sensitivity level, and scale. Historical calibration
+captures without sensitivity/scale fields remain provenance-bound legacy
+evidence, but new motion captures and exports must carry matching configured,
+requested, active, applied, and metadata values.
+
+Identical-data tests rejected candidate B as the default, online time-offset
+estimation as a runtime policy, and the former unreachable accumulated-track
+ZUPT duration gate. See [selected_runtime.md](selected_runtime.md) for the
+measurements and exact startup command. The explicit unverified
+acknowledgement is still mandatory; do not obtain convenience by changing the
+state string.
 
 ## v0.5.0 camera-transform contract
 
@@ -122,11 +163,10 @@ configuration must agree.
 
 After SDK motion correction, the project rotates accelerometer values into the
 gyro frame. The portable Kalibr `imu0.csv` contains this synchronized
-post-correction signal. Under that exact policy, the generated OpenVINS IMU
-intermediate represents `Tw`, `Ta`, `R_IMUtoGYRO`, and `R_IMUtoACC` as
-identity. It uses zero `Tg` because g-sensitivity was not estimated and online
-g-sensitivity calibration is disabled. The generator refuses to make this
-representation if motion correction was inactive.
+post-correction signal. The first noise-only OpenVINS intermediate represents
+`Tw`, `Ta`, `R_IMUtoGYRO`, and `R_IMUtoACC` as identity and `Tg` as zero only
+as an explicitly non-promotable placeholder. Active factory correction is
+provenance, not proof that the residual scale/cross-axis errors are zero.
 
 The unmodified separately sampled gyro/accelerometer CSV files are retained
 only as provenance under `ovrs_metadata/imu_raw`; Kalibr and Allan use the
@@ -228,9 +268,9 @@ The in-repository steps are:
    IMU-camera export manifests to
    `scripts/prepare_imu_calibration_yaml.py`.
 
-That script verifies the same serial, gyro rate, and motion-correction policy,
-re-hashes the copied export provenance, and requires the Allan YAML itself to
-report `/imu0` at the captured gyro rate.
+That script verifies the same serial, gyro rate, motion-correction policy, and
+RealSense timestamp policy, re-hashes the copied export provenance, and
+requires the Allan YAML itself to report `/imu0` at the captured gyro rate.
 It produces:
 
 - `kalibr_imu.yaml`: the flat Kalibr input using `/imu0`;
@@ -245,18 +285,37 @@ identity `Ta`/`Tw` matrices are accurate. Identity outputs remain marked
 until an independent, reviewed multi-orientation intrinsic calibration is
 supplied.
 
-After a separate multi-orientation calibration has produced reviewed `Tw`,
-`Ta`, `R_IMUtoGYRO`, `R_IMUtoACC`, and `Tg` matrices using the same
-motion-correction policy, pass that YAML with both
-`--imu-intrinsics-yaml PATH` and
-`--acknowledge-multi-orientation-intrinsics-reviewed`. The script checks matrix
-shape, finiteness, rotation validity, nonsingular scale matrices, policy
-agreement, and records the source SHA-256. This is a software-only workflow and
-never writes device EEPROM.
+Run the camera-IMU calibration with
+`--imu-models scale-misalignment`. The default `calibrated` model does not
+estimate these matrices. After reviewing excitation, residual/bias plots,
+physical plausibility, and repeatability against another independently
+recorded dynamic sequence, pass the raw Kalibr `imu-*.yaml` with both
+`--kalibr-intrinsics-yaml PATH` and
+`--acknowledge-kalibr-scale-misalignment-reviewed`. The script accepts only
+the raw Kalibr schema, checks rate and Allan noise identity, matrix shape and
+finiteness, lower-triangular positive-diagonal scale matrices, and the
+`C_gyro_i` rotation, then records the source SHA-256.
 
-The D435i estimator template uses ZUPT only during the initial stationary
-phase. Continuous ZUPT is an opt-in experiment requiring calibrated,
-ground-truthed replay; slow handheld motion can otherwise resemble a stop.
+The project-owned mapping is:
+
+```text
+Tw              = gyroscopes.M
+R_IMUtoGYRO     = gyroscopes.C_gyro_i
+Ta              = accelerometers.M
+R_IMUtoACC      = identity
+Tg              = gyroscopes.A * gyroscopes.C_gyro_i
+```
+
+The product in the final line is required by the actual Kalibr and OpenVINS
+v2.7 measurement equations; blindly renaming `A` leaves the acceleration in
+the wrong frame. OpenVINS applies configured static `Tg` during propagation
+even when online g-sensitivity estimation is disabled. This workflow never
+writes device EEPROM.
+
+The generic D435i estimator template uses ZUPT only during the initial
+stationary phase. The serial-specific selected runtime instead uses the
+reviewed visually gated one-second stop recovery documented in
+`docs/selected_runtime.md`; it is not a generic calibration default.
 
 ## Stereo and camera-IMU workflow
 
@@ -270,9 +329,12 @@ Kalibr image with the pinned Allan source. It does not rely on mutable
 `docker commit` state. Before bag creation,
 `scripts/validate_calibration_export_set.py` re-hashes export provenance and
 requires one serial, matching stereo/IMU-camera IR profiles and targets, and
-matching Allan/IMU-camera rates plus active motion correction. It also binds
-manifest fields back to the hashed source metadata and checks staged camera
-index/image counts, image dimensions, and IMU row counts. Its
+matching Allan/IMU-camera rates plus active motion correction. It derives or
+verifies one timestamp policy from the hashed resolved stream configuration,
+device option state, and observed per-stream timestamp domains; a Global Time
+export and Hardware Clock export cannot form one set. It also binds manifest
+fields back to the hashed source metadata and checks staged camera index/image
+counts, image dimensions, and IMU row counts. Its
 `UNVERIFIED_EXPORT_SET` report is a coherence gate, not promotion.
 
 Kalibr's catkin build installs its Python commands as ROS package executables,
@@ -294,16 +356,33 @@ interfaces before the image is accepted.
    describes good final reprojection errors as
    roughly below 0.2–0.5 pixels; treat this as a review criterion, not a
    repository-enforced magic number.
-6. Run `kalibr_calibrate_imu_camera --show-extraction` with the reviewed
-   stereo camchain and generated Kalibr IMU YAML.
+6. Run `kalibr_calibrate_imu_camera --show-extraction --imu-models
+   scale-misalignment` with the reviewed stereo camchain and generated Kalibr
+   IMU YAML.
 7. Inspect camera/IMU residuals, 3-sigma bounds, bias behaviour, timestamp
    deltas, target detections, transform direction, baseline, time-offset sign,
    and physical plausibility.
+
+Repeat the complete camera-IMU capture and calibration at least once in a new
+recording session before promotion. Compare transforms, IMU intrinsic
+matrices, and camera-to-IMU time offset. Similar residuals within each run do
+not prove inter-session timing repeatability. If the independently estimated
+time offset moves by milliseconds, reject the calibration set and preserve
+both results as evidence.
+
+For a timestamp-policy diagnosis, rebuild first and record a new Allan,
+stereo, and at least two camera-IMU captures with
+`config/sensors/realsense_streams_hardware_clock_diagnostic.yaml`. Do not
+reuse any Global Time capture in that set. Hardware Clock becomes eligible for
+promotion only if the independent runs are repeatable and the resulting
+calibration passes the same structural, manual, replay, and live gates. This
+diagnostic changes host timestamp mapping; it does not promise zero drift.
 
 Official references:
 
 - <https://docs.openvins.com/gs-calibration.html>
 - <https://github.com/ethz-asl/kalibr/wiki/camera-imu-calibration>
+- <https://github.com/ethz-asl/kalibr/wiki/Multi-IMU-and-IMU-intrinsic-calibration>
 - <https://github.com/ethz-asl/kalibr/wiki/bag-format>
 - <https://github.com/ethz-asl/kalibr/wiki/yaml-formats>
 - <https://github.com/ori-drs/allan_variance_ros>
@@ -317,7 +396,8 @@ Official references:
 - rigid `T_cam_imu`, nonzero stereo baseline, and finite time offsets;
 - an operator-supplied cam0/cam1 time-offset disagreement limit;
 - PDF signatures and source hashes;
-- extended IMU matrices and exactly zero `Tg`.
+- raw Kalibr intrinsic provenance, lower-triangular positive-diagonal
+  `Tw`/`Ta`, valid rotations, and exact `Tg=A*C_gyro_i` conversion.
 
 Its success verdict is `STRUCTURAL_PASS_MANUAL_REVIEW_REQUIRED`. It deliberately
 leaves a checklist unchecked.
@@ -347,8 +427,15 @@ Reject and recapture/recalibrate if any of these occur:
 - residuals/biases outside reviewed uncertainty bounds;
 - timestamp batching, discontinuity, or unexplained time-offset sign;
 - invalid/degenerate transform or physically implausible baseline;
-- nonzero `Tg` while the estimator's g-sensitivity calibration remains off;
-- severe trajectory divergence after the corrected verified configuration.
+- unrepeatable or physically implausible IMU intrinsic estimates;
+- a `Tg` that is not the frame-consistent `A*C_gyro_i` conversion;
+- severe trajectory divergence after the corrected verified configuration;
+- for the selected local candidate, a rapid multi-metre estimate that
+  disagrees with physical motion even when transport counters remain zero.
+
+The last condition is a runtime rejection, not proof that one calibration
+scalar is wrong. Preserve the run and record raw replay data before changing
+intrinsics, offsets, noise, ZUPT, or feature gates.
 
 Do not repair a rejected result by changing state labels, copying example
 numbers, averaging offsets silently, clipping trajectories, or relaxing

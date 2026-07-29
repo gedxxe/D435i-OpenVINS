@@ -252,7 +252,13 @@ def write_manifest(info, output: Path, image_mode: str) -> None:
         f"accelerometer_rate_hz: {info.accelerometer_rate_hz}",
         "motion_correction_active: "
         + ("true" if info.motion_correction_active else "false"),
+        "global_time_enabled: "
+        + ("true" if info.global_time_enabled else "false"),
     ]
+    if info.gyro_sensitivity is not None:
+        lines.append(f"gyro_sensitivity: {info.gyro_sensitivity}")
+    if info.gyro_scale_factor is not None:
+        lines.append(f"gyro_scale_factor: {info.gyro_scale_factor}")
     for key, digest in provenance_hashes:
         lines.append(f'{key}: "{digest}"')
     (output / "calibration_export_manifest.yaml").write_text(

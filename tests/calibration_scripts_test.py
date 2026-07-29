@@ -6,11 +6,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import importlib.util
+import re
 import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -21,6 +23,9 @@ from calibration_common import (  # noqa: E402
     CalibrationError,
     count_csv_rows,
     validate_capture,
+)
+from analyze_six_position_accelerometer import (  # noqa: E402
+    fit_six_position,
 )
 
 
@@ -64,7 +69,21 @@ def write_export_manifest(path: Path, text: str, mode: str) -> None:
                 if (value := scalar_values.get(key)) is not None
             )
         elif name == "resolved_stream_config":
-            content = "width: 848\nheight: 480\n"
+            content = (
+                "width: 848\nheight: 480\n"
+                "global_time_enabled: true\n"
+            )
+        elif name == "device_report":
+            content = (
+                "global_time_requested: true\n"
+                "global_time_available: true\n"
+                "global_time_active: true\n"
+                "timestamp_domains:\n"
+                '  accelerometer: "Global Time"\n'
+                '  gyro: "Global Time"\n'
+                '  infrared_1: "Global Time"\n'
+                '  infrared_2: "Global Time"\n'
+            )
         else:
             content = f"fixture: {name}\n"
         write(source, content)
@@ -148,14 +167,23 @@ def make_imu_capture(root: Path, bad_queue_drop: bool = False) -> None:
         'infrared_profile: "disabled"\n'
         "gyro_rate_hz: 200\n"
         "accelerometer_rate_hz: 250\n"
-        "motion_correction_active: true\n",
+        "motion_correction_active: true\n"
+        "global_time_active: true\n",
     )
     write(
         root / "device_report.yaml",
         "%YAML:1.0\n"
         'serial: "123456"\n'
         "stereo_stream_enabled: false\n"
-        "motion_streams_enabled: true\n",
+        "motion_streams_enabled: true\n"
+        "global_time_requested: true\n"
+        "global_time_available: true\n"
+        "global_time_active: true\n"
+        "timestamp_domains:\n"
+        '  accelerometer: "Global Time"\n'
+        '  gyro: "Global Time"\n'
+        '  infrared_1: "Global Time"\n'
+        '  infrared_2: "Global Time"\n',
     )
     zero_or_one = "1" if bad_queue_drop else "0"
     write(
@@ -183,7 +211,8 @@ def make_imu_capture(root: Path, bad_queue_drop: bool = False) -> None:
         root / "resolved_stream_config.yaml",
         "%YAML:1.0\n"
         "width: 848\nheight: 480\ncamera_fps: 30\n"
-        "gyro_fps: 200\naccelerometer_fps: 250\n",
+        "gyro_fps: 200\naccelerometer_fps: 250\n"
+        "global_time_enabled: true\n",
     )
     write(
         root / "imu" / "gyro.csv",
@@ -406,6 +435,7 @@ class CalibrationScriptTests(unittest.TestCase):
             )
             self.assertIn("Tg:", generated)
             self.assertIn("realsense_motion_correction_enabled: true", generated)
+            self.assertIn("realsense_global_time_enabled: true", generated)
             self.assertIn(
                 "allan_sample_status: CHARACTERIZATION_CANDIDATE",
                 generated,
@@ -450,22 +480,27 @@ class CalibrationScriptTests(unittest.TestCase):
                 ),
             )
 
-            intrinsics = root / "reviewed_intrinsics.yaml"
+            intrinsics = root / "kalibr_intrinsics.yaml"
             write(
                 intrinsics,
-                "%YAML:1.0\n"
                 "imu0:\n"
-                "  realsense_motion_correction_enabled: true\n"
-                "  Tw: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], "
-                "[0.0, 0.0, 1.0]]\n"
-                "  R_IMUtoGYRO: [[1.0, 0.0, 0.0], "
-                "[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]\n"
-                "  Ta: [[1.01, 0.0, 0.0], [0.0, 0.99, 0.0], "
-                "[0.0, 0.0, 1.02]]\n"
-                "  R_IMUtoACC: [[1.0, 0.0, 0.0], "
-                "[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]\n"
-                "  Tg: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "
-                "[0.0, 0.0, 0.0]]\n",
+                "  model: scale-misalignment\n"
+                "  rostopic: /imu0\n"
+                "  update_rate: 200\n"
+                "  accelerometer_noise_density: 0.01\n"
+                "  accelerometer_random_walk: 0.001\n"
+                "  gyroscope_noise_density: 0.0001\n"
+                "  gyroscope_random_walk: 0.00001\n"
+                "  accelerometers:\n"
+                "    M: [[1.01, 0.0, 0.0], [0.01, 0.99, 0.0], "
+                "[0.02, -0.01, 1.02]]\n"
+                "  gyroscopes:\n"
+                "    M: [[1.02, 0.0, 0.0], [0.01, 0.98, 0.0], "
+                "[-0.01, 0.02, 1.01]]\n"
+                "    C_gyro_i: [[0.0, -1.0, 0.0], "
+                "[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]\n"
+                "    A: [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], "
+                "[0.7, 0.8, 0.9]]\n",
             )
             reviewed_output = root / "reviewed_output"
             reviewed = subprocess.run(
@@ -478,9 +513,9 @@ class CalibrationScriptTests(unittest.TestCase):
                     str(allan_manifest),
                     "--imu-camera-export-manifest",
                     str(imucam_manifest),
-                    "--imu-intrinsics-yaml",
+                    "--kalibr-intrinsics-yaml",
                     str(intrinsics),
-                    "--acknowledge-multi-orientation-intrinsics-reviewed",
+                    "--acknowledge-kalibr-scale-misalignment-reviewed",
                     "--output-dir",
                     str(reviewed_output),
                 ],
@@ -497,6 +532,45 @@ class CalibrationScriptTests(unittest.TestCase):
                 reviewed_text,
             )
             self.assertIn("[1.01, 0.0, 0.0]", reviewed_text)
+            self.assertIn(
+                "imu_intrinsic_method: KALIBR_SCALE_MISALIGNMENT",
+                reviewed_text,
+            )
+            # Tg is Kalibr A*C_gyro_i, not a blind copy of A.
+            self.assertIn("Tg:\n    - [0.2, -0.1, 0.3]", reviewed_text)
+
+            calibrated_intrinsics = root / "calibrated_intrinsics.yaml"
+            write(
+                calibrated_intrinsics,
+                intrinsics.read_text(encoding="utf-8").replace(
+                    "model: scale-misalignment", "model: calibrated"
+                ),
+            )
+            calibrated_rejected = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "prepare_imu_calibration_yaml.py"),
+                    "--allan-yaml",
+                    str(allan_yaml),
+                    "--allan-export-manifest",
+                    str(allan_manifest),
+                    "--imu-camera-export-manifest",
+                    str(imucam_manifest),
+                    "--kalibr-intrinsics-yaml",
+                    str(calibrated_intrinsics),
+                    "--acknowledge-kalibr-scale-misalignment-reviewed",
+                    "--output-dir",
+                    str(root / "calibrated_rejected"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(calibrated_rejected.returncode, 2)
+            self.assertIn(
+                "model must be scale-misalignment",
+                calibrated_rejected.stderr,
+            )
 
             wrong_rate_yaml = root / "wrong_rate_allan.yaml"
             write(
@@ -651,7 +725,64 @@ class CalibrationScriptTests(unittest.TestCase):
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("UNVERIFIED_EXPORT_SET", report_text)
             self.assertIn('calibrated_serial: "123456"', report_text)
+            self.assertIn("global_time_enabled: true", report_text)
 
+            stereo_stream = (
+                stereo.parent
+                / "ovrs_metadata"
+                / "source_resolved_stream_config.yaml"
+            )
+            stereo_device = (
+                stereo.parent / "ovrs_metadata" / "source_device_report.yaml"
+            )
+            write(
+                stereo_stream,
+                stereo_stream.read_text(encoding="utf-8").replace(
+                    "global_time_enabled: true",
+                    "global_time_enabled: false",
+                ),
+            )
+            write(
+                stereo_device,
+                stereo_device.read_text(encoding="utf-8")
+                .replace("global_time_requested: true", "global_time_requested: false")
+                .replace("global_time_active: true", "global_time_active: false")
+                .replace("Global Time", "Hardware Clock"),
+            )
+            stereo_text = stereo.read_text(encoding="utf-8")
+            for key, source in (
+                ("source_device_report_sha256", stereo_device),
+                ("source_resolved_stream_config_sha256", stereo_stream),
+            ):
+                stereo_text = re.sub(
+                    rf'({key}: ")[0-9a-f]{{64}}(")',
+                    rf"\g<1>{hashlib.sha256(source.read_bytes()).hexdigest()}\2",
+                    stereo_text,
+                )
+            write(stereo, stereo_text)
+            mixed_clock = subprocess.run(
+                command[:-1] + [str(root / "mixed_clock.yaml")],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(mixed_clock.returncode, 0)
+            self.assertIn(
+                "exports disagree on timestamp policy", mixed_clock.stderr
+            )
+
+            write_export_manifest(
+                stereo,
+                common
+                + 'capture_mode: "stereo-calibration"\n'
+                + 'infrared_profile: "848x480 Y8 @30"\n'
+                + "camera_rows_per_camera: 10\n"
+                + "synchronized_imu_rows: 0\n"
+                + "gyro_rate_hz: 0\n"
+                + "accelerometer_rate_hz: 0\n"
+                + "motion_correction_active: false\n",
+                "stereo-calibration",
+            )
             valid_imucam_manifest = imucam.read_text(encoding="utf-8")
             write(
                 imucam,
@@ -854,20 +985,26 @@ class CalibrationScriptTests(unittest.TestCase):
         self.assertEqual(rejected.returncode, 5, rejected.stderr)
         self.assertIn("fit_result: FAIL", rejected.stdout)
 
-    def test_readme_uses_rosrun_for_catkin_kalibr_tools(self) -> None:
-        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    def test_operator_runbook_uses_rosrun_for_catkin_kalibr_tools(
+        self,
+    ) -> None:
+        runbook = (
+            REPOSITORY / "docs" / "operator_runbook.md"
+        ).read_text(encoding="utf-8")
         for tool in (
             "kalibr_create_target_pdf",
             "kalibr_bagcreater",
             "kalibr_calibrate_cameras",
             "kalibr_calibrate_imu_camera",
         ):
-            self.assertIn(f"rosrun kalibr {tool}", readme)
-        self.assertNotIn("exec kalibr_", readme)
+            self.assertIn(f"rosrun kalibr {tool}", runbook)
+        self.assertNotIn("exec kalibr_", runbook)
         self.assertNotRegex(
-            readme,
+            runbook,
             r"(?m)^  kalibr_(?:bag|calibrate)[A-Za-z0-9_]*[ \t]+",
         )
+        self.assertIn("--imu-models scale-misalignment", runbook)
+        self.assertNotIn("--imu-intrinsics-yaml", runbook)
 
     def test_d435i_template_retains_short_baseline_estimator_limits(
         self,
@@ -892,6 +1029,130 @@ class CalibrationScriptTests(unittest.TestCase):
         for line in expected_lines:
             self.assertEqual(template.count(line), 1)
 
+    def test_selected_runtime_documentation_uses_one_policy(self) -> None:
+        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        selected = (
+            REPOSITORY / "docs" / "selected_runtime.md"
+        ).read_text(encoding="utf-8")
+        estimator_doc = (
+            REPOSITORY / "config" / "estimator" / "README.md"
+        ).read_text(encoding="utf-8")
+        preflight = (
+            REPOSITORY / "scripts" / "preflight_ubuntu.sh"
+        ).read_text(encoding="utf-8")
+
+        selected_path = (
+            "config/local/d435i-843212070146/"
+            "selected_runtime/estimator.yaml"
+        )
+        for document in (readme, selected, estimator_doc):
+            self.assertIn(selected_path, document)
+
+        for document in (readme, selected):
+            self.assertIn("--online-time-offset off", document)
+            self.assertNotIn("--online-time-offset on", document)
+
+        self.assertIn("zupt_only_at_beginning: false", selected)
+        self.assertIn("zupt_min_stationary_time: 1.0", selected)
+        self.assertIn("visually gated continuous ZUPT", selected)
+        self.assertIn("zupt_only_at_beginning: false", estimator_doc)
+        self.assertIn("consecutive per-frame disparity", estimator_doc)
+        self.assertIn(
+            'config/local/d435i-*/selected_runtime/*_imucam.yaml',
+            preflight,
+        )
+
+    def test_interactive_viewer_contract_is_documented(self) -> None:
+        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        selected = (
+            REPOSITORY / "docs" / "selected_runtime.md"
+        ).read_text(encoding="utf-8")
+        manual = (
+            REPOSITORY / "docs" / "manual_test.md"
+        ).read_text(encoding="utf-8")
+        live = (REPOSITORY / "apps" / "ovrs_live.cpp").read_text(
+            encoding="utf-8"
+        )
+        replay = (REPOSITORY / "apps" / "ovrs_replay.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for document in (readme, selected, manual):
+            normalized = document.lower()
+            self.assertIn("left-drag", normalized)
+            self.assertIn("middle/right-drag", normalized)
+            self.assertIn("wheel", normalized)
+
+        for source in (live, replay):
+            self.assertIn("global XYZ", source)
+            self.assertIn("interactive", source)
+            self.assertIn("left-drag orbits", source)
+            self.assertIn("middle/right-drag", source)
+            self.assertIn("pans, the ", source)
+            self.assertIn("wheel zooms", source)
+
+    @unittest.skipUnless(
+        (
+            REPOSITORY
+            / "third_party"
+            / "open_vins"
+            / "ov_msckf"
+            / "src"
+            / "core"
+            / "VioManager.h"
+        ).is_file(),
+        "OpenVINS submodule is not initialized",
+    )
+    def test_visual_diagnostics_use_current_tracks_and_msckf_batches(
+        self,
+    ) -> None:
+        manager_header = (
+            REPOSITORY
+            / "third_party"
+            / "open_vins"
+            / "ov_msckf"
+            / "src"
+            / "core"
+            / "VioManager.h"
+        ).read_text(encoding="utf-8")
+        manager_source = (
+            REPOSITORY
+            / "third_party"
+            / "open_vins"
+            / "ov_msckf"
+            / "src"
+            / "core"
+            / "VioManager.cpp"
+        ).read_text(encoding="utf-8")
+        adapter = (REPOSITORY / "src" / "openvins_estimator.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("get_active_track_count(size_t camera_id)", manager_header)
+        self.assertIn("struct MsckfUpdateStats", manager_header)
+        self.assertIn("get_last_msckf_update_stats()", manager_header)
+        self.assertIn("trackFEATS->get_last_ids()", manager_source)
+        self.assertIn(
+            "last_msckf_update_stats.accepted_features = "
+            "featsup_MSCKF.size()",
+            manager_source,
+        )
+        self.assertIn("get_active_track_count(0)", adapter)
+        self.assertIn("get_last_msckf_update_stats()", adapter)
+        self.assertIn("msckf_update_quality_available = true", adapter)
+
+    @unittest.skipUnless(
+        (
+            REPOSITORY
+            / "third_party"
+            / "open_vins"
+            / "ov_msckf"
+            / "src"
+            / "update"
+            / "UpdaterZeroVelocity.cpp"
+        ).is_file(),
+        "OpenVINS submodule is not initialized",
+    )
     def test_zupt_patch_requires_visual_and_inertial_gates(self) -> None:
         source = (
             REPOSITORY
@@ -927,7 +1188,7 @@ class CalibrationScriptTests(unittest.TestCase):
         self.assertIn("rate fallback is disabled", source)
         self.assertNotIn("std::abs(a - requested)", source)
         self.assertIn(
-            'gyroscope_value_unit: \\"rad/s from librealsense motion API\\"',
+            "configured scale factor is applied to the",
             source,
         )
         self.assertIn(
@@ -953,7 +1214,7 @@ class CalibrationScriptTests(unittest.TestCase):
                 f"{hashlib.sha256(imu.read_bytes()).hexdigest()}\n"
             )
             unchecked = header + "".join(
-                f"- [ ] review item {index}\n" for index in range(7)
+                f"- [ ] review item {index}\n" for index in range(8)
             )
             with self.assertRaisesRegex(
                 CalibrationError, "still contains unchecked"
@@ -1001,6 +1262,8 @@ class CalibrationScriptTests(unittest.TestCase):
             self.assertEqual(info.mode, "imu-allan")
             self.assertFalse(info.stereo_enabled)
             self.assertEqual(info.synchronized_imu_rows, 2)
+            self.assertIsNone(info.gyro_sensitivity)
+            self.assertIsNone(info.gyro_scale_factor)
 
             completed = subprocess.run(
                 [
@@ -1045,6 +1308,74 @@ class CalibrationScriptTests(unittest.TestCase):
                 "measure_rate: 200\n"
                 "sequence_time: 10\n",
             )
+
+    def test_capture_binds_explicit_gyro_sensitivity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / "capture"
+            output = root / "export"
+            make_imu_capture(capture)
+            metadata = capture / "dataset_metadata.yaml"
+            report = capture / "device_report.yaml"
+            stream = capture / "resolved_stream_config.yaml"
+            write(
+                metadata,
+                metadata.read_text(encoding="utf-8")
+                + "gyro_sensitivity_active: 1\n"
+                + "gyro_scale_factor_applied: 0.5\n",
+            )
+            write(
+                report,
+                report.read_text(encoding="utf-8")
+                + "gyro_sensitivity_requested: 1\n"
+                + "gyro_sensitivity_available: true\n"
+                + "gyro_sensitivity_active: 1\n"
+                + "gyro_scale_factor_configured: 0.5\n"
+                + "gyro_scale_factor_applied: 0.5\n",
+            )
+            write(
+                stream,
+                stream.read_text(encoding="utf-8")
+                + "gyro_sensitivity: 1\n"
+                + "gyro_scale_factor: 0.5\n",
+            )
+
+            info = validate_capture(capture)
+            self.assertEqual(info.gyro_sensitivity, 1)
+            self.assertEqual(info.gyro_scale_factor, Decimal("0.5"))
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "export_calibration_capture.py"),
+                    "--capture",
+                    str(capture),
+                    "--output",
+                    str(output),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = (
+                output / "calibration_export_manifest.yaml"
+            ).read_text(encoding="utf-8")
+            self.assertIn("gyro_sensitivity: 1", manifest)
+            self.assertIn("gyro_scale_factor: 0.5", manifest)
+
+            write(
+                report,
+                report.read_text(encoding="utf-8").replace(
+                    "gyro_sensitivity_active: 1",
+                    "gyro_sensitivity_active: 0",
+                ),
+            )
+            with self.assertRaisesRegex(
+                CalibrationError,
+                "configuration, request, readback, and capture metadata "
+                "disagree",
+            ):
+                validate_capture(capture)
 
     def test_capture_validator_streams_and_ignores_nested_report_keys(
         self,
@@ -1092,6 +1423,21 @@ class CalibrationScriptTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("validation: PASS", completed.stdout)
             self.assertIn("capture_modified: false", completed.stdout)
+
+            device_report = root / "device_report.yaml"
+            valid_device_report = device_report.read_text(encoding="utf-8")
+            write(
+                device_report,
+                valid_device_report.replace(
+                    'gyro: "Global Time"', 'gyro: "Hardware Clock"'
+                ),
+            )
+            with self.assertRaisesRegex(
+                CalibrationError,
+                "gyro timestamp domain is Hardware Clock, expected Global Time",
+            ):
+                validate_capture(root)
+            write(device_report, valid_device_report)
 
             summary = root / "recording_summary.yaml"
             write(
@@ -1269,9 +1615,13 @@ class CalibrationScriptTests(unittest.TestCase):
                 "imu0:\n"
                 "  allan_sample_status: CHARACTERIZATION_CANDIDATE\n"
                 "  imu_intrinsic_status: MULTI_ORIENTATION_REVIEWED\n"
+                "  imu_intrinsic_method: KALIBR_SCALE_MISALIGNMENT\n"
+                "  imu_intrinsic_mapping: ovrs-kalibr-openvins-imu-v1\n"
+                f"  imu_intrinsic_source_sha256: {'a' * 64}\n"
                 "  model: kalibr\n"
                 "  update_rate: 200\n"
                 "  realsense_motion_correction_enabled: true\n"
+                "  realsense_global_time_enabled: true\n"
                 "  accelerometer_noise_density: 0.001\n"
                 "  accelerometer_random_walk: 0.0001\n"
                 "  gyroscope_noise_density: 0.0001\n"
@@ -1282,6 +1632,7 @@ class CalibrationScriptTests(unittest.TestCase):
                 f"  Ta: {identity3}\n"
                 f"  R_IMUtoACC: {identity3}\n"
                 f"  Tg: {zero3}\n"
+                f"  kalibr_gyroscope_A: {zero3}\n"
             )
             write(imu, imu_text)
             camera_report.write_bytes(b"%PDF-1.4\nsynthetic\n")
@@ -1337,7 +1688,9 @@ class CalibrationScriptTests(unittest.TestCase):
                 command, check=False, capture_output=True, text=True
             )
             self.assertEqual(rejected.returncode, 2)
-            self.assertIn("Ta must be nonsingular", rejected.stderr)
+            self.assertIn(
+                "Ta diagonal entries must be positive", rejected.stderr
+            )
 
     def test_stationary_gravity_gate_passes_and_rejects_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1410,6 +1763,65 @@ class CalibrationScriptTests(unittest.TestCase):
                 completed.stderr,
             )
             self.assertNotIn("Traceback", completed.stderr)
+
+    def test_six_position_accelerometer_fit_recovers_affine_model(
+        self,
+    ) -> None:
+        gravity = 9.80665
+        forward = [
+            [1.01, 0.02, -0.01],
+            [-0.01, 0.99, 0.015],
+            [0.005, -0.02, 1.02],
+        ]
+        bias = [0.12, -0.08, 0.04]
+        means: dict[str, list[float]] = {}
+        for name, axis, sign in (
+            ("x-positive", 0, 1.0),
+            ("x-negative", 0, -1.0),
+            ("y-positive", 1, 1.0),
+            ("y-negative", 1, -1.0),
+            ("z-positive", 2, 1.0),
+            ("z-negative", 2, -1.0),
+        ):
+            ideal = [0.0, 0.0, 0.0]
+            ideal[axis] = sign * gravity
+            means[name] = [
+                sum(forward[row][column] * ideal[column]
+                    for column in range(3))
+                + bias[row]
+                for row in range(3)
+            ]
+
+        fit = fit_six_position(means, gravity)
+        for actual, expected in zip(fit["bias"], bias):
+            self.assertAlmostEqual(actual, expected, places=12)
+        for actual_row, expected_row in zip(fit["forward"], forward):
+            for actual, expected in zip(actual_row, expected_row):
+                self.assertAlmostEqual(actual, expected, places=12)
+        self.assertAlmostEqual(fit["residual_max"], 0.0, places=12)
+        for name, axis, sign in (
+            ("x-positive", 0, 1.0),
+            ("x-negative", 0, -1.0),
+            ("y-positive", 1, 1.0),
+            ("y-negative", 1, -1.0),
+            ("z-positive", 2, 1.0),
+            ("z-negative", 2, -1.0),
+        ):
+            corrected = fit["corrected"][name]
+            for index, value in enumerate(corrected):
+                expected = sign * gravity if index == axis else 0.0
+                self.assertAlmostEqual(value, expected, places=10)
+
+    def test_six_position_accelerometer_fit_rejects_singular_model(
+        self,
+    ) -> None:
+        means = {
+            f"{axis}-{sign}": [0.0, 0.0, 9.80665]
+            for axis in ("x", "y", "z")
+            for sign in ("positive", "negative")
+        }
+        with self.assertRaisesRegex(ValueError, "singular"):
+            fit_six_position(means, 9.80665)
 
 
 if __name__ == "__main__":
