@@ -20,7 +20,7 @@ from export_vislam_benchmark import (
 )
 
 
-TRACKING_FIELDS = (
+TRACKING_FIELDS_LEGACY = (
     "timestamp_s",
     "state",
     "tracked_keypoints",
@@ -35,6 +35,20 @@ TRACKING_FIELDS = (
     "reset_pending",
     "stable_gate_elapsed_s",
     "trajectory_candidate_accepted",
+)
+POSE_FIELDS = (
+    "pose_tx_m",
+    "pose_ty_m",
+    "pose_tz_m",
+    "pose_qx",
+    "pose_qy",
+    "pose_qz",
+    "pose_qw",
+)
+TRACKING_FIELDS_POSE_RATE = (
+    *TRACKING_FIELDS_LEGACY[:12],
+    *POSE_FIELDS,
+    *TRACKING_FIELDS_LEGACY[12:],
 )
 IMU_FIELDS = (
     "timestamp_s",
@@ -82,6 +96,7 @@ class TrackingRow:
     reset_count: int
     map_change_index: int
     reset_pending: bool
+    pose: tuple[float, ...] | None
     stable_gate_elapsed_s: float
     accepted: bool
 
@@ -94,6 +109,10 @@ class TrackingStats:
     tracking_loss_after_acceptance_count: int
     tracking_gap_after_acceptance_count: int
     visual_support_failure_after_acceptance_count: int
+    pose_rate_failure_count: int
+    pose_rate_failure_after_acceptance_count: int
+    maximum_observed_pose_linear_speed_m_s: float
+    maximum_observed_pose_angular_speed_rad_s: float
     maximum_observed_tracking_interval_s: float
     accepted_timestamps_s: tuple[float, ...]
     ever_inertial_initialized: bool
@@ -119,6 +138,7 @@ class TrajectoryStats:
     path_length_m: float
     maximum_adjacent_translation_m: float
     maximum_adjacent_speed_m_s: float
+    maximum_adjacent_angular_speed_rad_s: float
     bounding_box_x_m: float
     bounding_box_y_m: float
     bounding_box_z_m: float
@@ -265,8 +285,18 @@ def parse_tracking(
     maximum_tracking_interval_s: float,
     maximum_preacceptance_map_resets: int,
     minimum_tracked_map_points: int,
+    maximum_pose_linear_speed_m_s: float,
+    maximum_pose_angular_speed_rad_s: float,
+    pose_rate_contract: bool,
 ) -> TrackingStats:
-    raw_rows = read_csv(path, TRACKING_FIELDS)
+    raw_rows = read_csv(
+        path,
+        (
+            TRACKING_FIELDS_POSE_RATE
+            if pose_rate_contract
+            else TRACKING_FIELDS_LEGACY
+        ),
+    )
     rows: list[TrackingRow] = []
     accepted_timestamps: list[float] = []
     previous_timestamp = -math.inf
@@ -281,6 +311,10 @@ def parse_tracking(
     tracking_loss_after_acceptance_count = 0
     tracking_gap_after_acceptance_count = 0
     visual_support_failure_after_acceptance_count = 0
+    pose_rate_failure_count = 0
+    pose_rate_failure_after_acceptance_count = 0
+    maximum_observed_pose_linear_speed_m_s = 0.0
+    maximum_observed_pose_angular_speed_rad_s = 0.0
     maximum_observed_tracking_interval_s = 0.0
     pending_observed = False
     pending_after_acceptance_observed = False
@@ -290,6 +324,8 @@ def parse_tracking(
     acceptance_discontinuities = 0
     map_change_after_acceptance = False
     stable_gate_started_at: float | None = None
+    previous_pose: tuple[float, ...] | None = None
+    previous_pose_timestamp: float | None = None
 
     for index, raw in enumerate(raw_rows, 2):
         prefix = f"{path}:{index}"
@@ -346,6 +382,77 @@ def parse_tracking(
         reset_pending = parse_csv_bool(
             raw["reset_pending"], f"{prefix} reset_pending"
         )
+        pose: tuple[float, ...] | None = None
+        pose_rate_sufficient = True
+        if pose_rate_contract:
+            pose_values = tuple(raw[field] for field in POSE_FIELDS)
+            if state in POSE_STATES:
+                if any(not value.strip() for value in pose_values):
+                    raise BenchmarkError(
+                        f"{prefix}: pose-valid state lacks pose fields"
+                    )
+                pose = tuple(
+                    parse_float(value, f"{prefix} {field}")
+                    for field, value in zip(POSE_FIELDS, pose_values)
+                )
+                quaternion_norm = math.sqrt(
+                    sum(value * value for value in pose[3:])
+                )
+                if abs(quaternion_norm - 1.0) > 1e-3:
+                    raise BenchmarkError(
+                        f"{prefix}: pose quaternion is not normalized"
+                    )
+            elif any(value.strip() for value in pose_values):
+                raise BenchmarkError(
+                    f"{prefix}: non-pose tracking state contains pose fields"
+                )
+        pose_boundary = (
+            tracking_gap
+            or reset_pending
+            or reset_count != previous_reset_count
+            or map_change != previous_map_change
+        )
+        if pose_rate_contract:
+            if pose is None:
+                previous_pose = None
+                previous_pose_timestamp = None
+                pose_rate_sufficient = False
+            else:
+                if pose_boundary:
+                    previous_pose = None
+                    previous_pose_timestamp = None
+                if previous_pose is not None:
+                    assert previous_pose_timestamp is not None
+                    pose_delta_time_s = timestamp - previous_pose_timestamp
+                    linear_speed_m_s = (
+                        math.dist(previous_pose[:3], pose[:3])
+                        / pose_delta_time_s
+                    )
+                    angular_speed_rad_s = math.radians(
+                        quaternion_return_angle_deg(
+                            previous_pose[3:], pose[3:]
+                        )
+                    ) / pose_delta_time_s
+                    maximum_observed_pose_linear_speed_m_s = max(
+                        maximum_observed_pose_linear_speed_m_s,
+                        linear_speed_m_s,
+                    )
+                    maximum_observed_pose_angular_speed_rad_s = max(
+                        maximum_observed_pose_angular_speed_rad_s,
+                        angular_speed_rad_s,
+                    )
+                    pose_rate_sufficient = (
+                        linear_speed_m_s
+                        <= maximum_pose_linear_speed_m_s
+                        + FLOAT_TOLERANCE
+                        and angular_speed_rad_s
+                        <= maximum_pose_angular_speed_rad_s
+                        + FLOAT_TOLERANCE
+                    )
+                    if not pose_rate_sufficient:
+                        pose_rate_failure_count += 1
+                previous_pose = pose
+                previous_pose_timestamp = timestamp
         stable_elapsed = parse_float(
             raw["stable_gate_elapsed_s"],
             f"{prefix} stable_gate_elapsed_s",
@@ -364,9 +471,16 @@ def parse_tracking(
             and ba2
             and state in POSE_STATES
             and visual_support_sufficient
+            and pose_rate_sufficient
+            and not reset_pending
         )
         if gate_ready:
-            if stable_gate_started_at is None or tracking_gap:
+            if (
+                stable_gate_started_at is None
+                or tracking_gap
+                or reset_count != previous_reset_count
+                or map_change != previous_map_change
+            ):
                 stable_gate_started_at = timestamp
             expected_stable_elapsed = timestamp - stable_gate_started_at
         else:
@@ -403,6 +517,7 @@ def parse_tracking(
                 or reset_count > maximum_preacceptance_map_resets
                 or reset_pending
                 or not visual_support_sufficient
+                or not pose_rate_sufficient
                 or stable_elapsed + FLOAT_TOLERANCE < minimum_stable_s
             ):
                 raise BenchmarkError(
@@ -420,6 +535,8 @@ def parse_tracking(
                 tracking_gap_after_acceptance_count += 1
             if state in POSE_STATES and not visual_support_sufficient:
                 visual_support_failure_after_acceptance_count += 1
+            if state in POSE_STATES and not pose_rate_sufficient:
+                pose_rate_failure_after_acceptance_count += 1
 
         if state in POSE_STATES:
             visual_pose_count += 1
@@ -443,6 +560,7 @@ def parse_tracking(
                 reset_count=reset_count,
                 map_change_index=map_change,
                 reset_pending=reset_pending,
+                pose=pose,
                 stable_gate_elapsed_s=stable_elapsed,
                 accepted=accepted,
             )
@@ -474,6 +592,16 @@ def parse_tracking(
         ),
         visual_support_failure_after_acceptance_count=(
             visual_support_failure_after_acceptance_count
+        ),
+        pose_rate_failure_count=pose_rate_failure_count,
+        pose_rate_failure_after_acceptance_count=(
+            pose_rate_failure_after_acceptance_count
+        ),
+        maximum_observed_pose_linear_speed_m_s=(
+            maximum_observed_pose_linear_speed_m_s
+        ),
+        maximum_observed_pose_angular_speed_rad_s=(
+            maximum_observed_pose_angular_speed_rad_s
         ),
         maximum_observed_tracking_interval_s=(
             maximum_observed_tracking_interval_s
@@ -691,6 +819,16 @@ def parse_trajectory(
             adjacent_distances, timestamps, timestamps[1:]
         )
     ]
+    adjacent_angular_speeds = [
+        math.radians(quaternion_return_angle_deg(previous, current))
+        / (current_timestamp - previous_timestamp)
+        for previous, current, previous_timestamp, current_timestamp in zip(
+            quaternions,
+            quaternions[1:],
+            timestamps,
+            timestamps[1:],
+        )
+    ]
     axes = tuple(zip(*positions))
     return TrajectoryStats(
         rows=len(timestamps),
@@ -707,6 +845,9 @@ def parse_trajectory(
         path_length_m=sum(adjacent_distances),
         maximum_adjacent_translation_m=max(adjacent_distances, default=0.0),
         maximum_adjacent_speed_m_s=max(adjacent_speeds, default=0.0),
+        maximum_adjacent_angular_speed_rad_s=max(
+            adjacent_angular_speeds, default=0.0
+        ),
         bounding_box_x_m=max(axes[0]) - min(axes[0]),
         bounding_box_y_m=max(axes[1]) - min(axes[1]),
         bounding_box_z_m=max(axes[2]) - min(axes[2]),
@@ -953,23 +1094,35 @@ def validate_provenance(
     if bundle_format not in (
         "ovrs-orbslam3-live-bundle-v4",
         "ovrs-orbslam3-live-bundle-v5",
+        "ovrs-orbslam3-live-bundle-v6",
     ):
         raise BenchmarkError(
             f"unsupported live bundle format: {bundle_format}"
         )
-    visual_support_contract = (
-        bundle_format == "ovrs-orbslam3-live-bundle-v5"
+    visual_support_contract = bundle_format in (
+        "ovrs-orbslam3-live-bundle-v5",
+        "ovrs-orbslam3-live-bundle-v6",
     )
-    trajectory_policy = (
-        "startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
-        "visual_support_continuous_bounded_preacceptance_resets_"
-        "zero_postacceptance_resets_no_postacceptance_map_correction"
-        if visual_support_contract
-        else
-        "startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
-        "bounded_preacceptance_resets_zero_postacceptance_resets_"
-        "no_postacceptance_map_correction"
-    )
+    pose_rate_contract = bundle_format == "ovrs-orbslam3-live-bundle-v6"
+    if pose_rate_contract:
+        trajectory_policy = (
+            "startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
+            "visual_support_bounded_pose_rates_continuous_"
+            "bounded_preacceptance_resets_zero_postacceptance_resets_"
+            "no_postacceptance_map_correction"
+        )
+    elif visual_support_contract:
+        trajectory_policy = (
+            "startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
+            "visual_support_continuous_bounded_preacceptance_resets_"
+            "zero_postacceptance_resets_no_postacceptance_map_correction"
+        )
+    else:
+        trajectory_policy = (
+            "startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
+            "bounded_preacceptance_resets_zero_postacceptance_resets_"
+            "no_postacceptance_map_correction"
+        )
     expected_metadata = {
         "mode": "experimental_pure_orbslam3_live",
         "openvins_pose_consumed": "false",
@@ -1031,11 +1184,18 @@ def validate_provenance(
     runtime_provenance_format = metadata.get(
         "runtime_provenance_format", ""
     )
-    expected_runtime_provenance_format = (
-        "ovrs-orbslam3-live-runtime-provenance-v6"
-        if visual_support_contract
-        else "ovrs-orbslam3-live-runtime-provenance-v5"
-    )
+    if pose_rate_contract:
+        expected_runtime_provenance_format = (
+            "ovrs-orbslam3-live-runtime-provenance-v7"
+        )
+    elif visual_support_contract:
+        expected_runtime_provenance_format = (
+            "ovrs-orbslam3-live-runtime-provenance-v6"
+        )
+    else:
+        expected_runtime_provenance_format = (
+            "ovrs-orbslam3-live-runtime-provenance-v5"
+        )
     if runtime_provenance_format == expected_runtime_provenance_format:
         launch_path = run_dir / "launch_provenance.yaml"
         captured_manifest_path = run_dir / "source_live_manifest.yaml"
@@ -1135,6 +1295,14 @@ def validate_provenance(
         "minimum_stable_inertial_seconds",
         "maximum_tracking_interval_seconds",
         "maximum_tracking_interval_factor",
+        *(
+            (
+                "maximum_pose_linear_speed_m_s",
+                "maximum_pose_angular_speed_rad_s",
+            )
+            if pose_rate_contract
+            else ()
+        ),
         "maximum_preacceptance_map_resets",
         "gravity_m_s2",
         "startup_maximum_gravity_error_m_s2",
@@ -1175,6 +1343,14 @@ def validate_provenance(
             "minimum_tracked_map_points",
         ),
         (
+            "live_maximum_pose_linear_speed_m_s",
+            "maximum_pose_linear_speed_m_s",
+        ),
+        (
+            "live_maximum_pose_angular_speed_rad_s",
+            "maximum_pose_angular_speed_rad_s",
+        ),
+        (
             "live_maximum_preacceptance_map_resets",
             "maximum_preacceptance_map_resets",
         ),
@@ -1196,10 +1372,14 @@ def validate_provenance(
             "maximum_input_stall_seconds",
         ),
     ):
-        if (
-            manifest_key == "minimum_tracked_map_points"
-            and not visual_support_contract
+        if manifest_key == "minimum_tracked_map_points" and not (
+            visual_support_contract
         ):
+            continue
+        if manifest_key in (
+            "maximum_pose_linear_speed_m_s",
+            "maximum_pose_angular_speed_rad_s",
+        ) and not pose_rate_contract:
             continue
         require_close(
             parse_float(
@@ -1321,8 +1501,13 @@ def evaluate(args: argparse.Namespace) -> None:
         raise BenchmarkError(
             "maximum_preacceptance_map_resets exceeds supported bound"
         )
-    visual_support_contract = (
-        manifest.get("format") == "ovrs-orbslam3-live-bundle-v5"
+    bundle_format = manifest.get("format")
+    visual_support_contract = bundle_format in (
+        "ovrs-orbslam3-live-bundle-v5",
+        "ovrs-orbslam3-live-bundle-v6",
+    )
+    pose_rate_contract = (
+        bundle_format == "ovrs-orbslam3-live-bundle-v6"
     )
     minimum_tracked_map_points = (
         parse_int(
@@ -1335,6 +1520,32 @@ def evaluate(args: argparse.Namespace) -> None:
         if visual_support_contract
         else 0
     )
+    maximum_pose_linear_speed_m_s = (
+        parse_float(
+            require_scalar(
+                metadata,
+                "maximum_pose_linear_speed_m_s",
+                "run metadata",
+            ),
+            "maximum_pose_linear_speed_m_s",
+            strictly_positive=True,
+        )
+        if pose_rate_contract
+        else math.inf
+    )
+    maximum_pose_angular_speed_rad_s = (
+        parse_float(
+            require_scalar(
+                metadata,
+                "maximum_pose_angular_speed_rad_s",
+                "run metadata",
+            ),
+            "maximum_pose_angular_speed_rad_s",
+            strictly_positive=True,
+        )
+        if pose_rate_contract
+        else math.inf
+    )
     tracking_path = run_dir / "live_tracking_states.csv"
     imu_path = run_dir / "live_imu_excitation.csv"
     visual_path = run_dir / "live_visual_tracking_trajectory_tum.txt"
@@ -1344,6 +1555,9 @@ def evaluate(args: argparse.Namespace) -> None:
         maximum_tracking_interval_s,
         maximum_preacceptance_map_resets,
         minimum_tracked_map_points,
+        maximum_pose_linear_speed_m_s,
+        maximum_pose_angular_speed_rad_s,
+        pose_rate_contract,
     )
     parse_imu(imu_path, tracking)
     visual = parse_trajectory(
@@ -1419,6 +1633,72 @@ def evaluate(args: argparse.Namespace) -> None:
                 "visual_support_failure_after_acceptance_count",
             ),
             "visual support failure after acceptance count",
+        )
+    if pose_rate_contract:
+        require_close(
+            maximum_pose_linear_speed_m_s,
+            parse_float(
+                require_scalar(
+                    summary,
+                    "maximum_pose_linear_speed_m_s",
+                    "run summary",
+                ),
+                "maximum_pose_linear_speed_m_s",
+                strictly_positive=True,
+            ),
+            "maximum pose linear speed",
+        )
+        require_close(
+            maximum_pose_angular_speed_rad_s,
+            parse_float(
+                require_scalar(
+                    summary,
+                    "maximum_pose_angular_speed_rad_s",
+                    "run summary",
+                ),
+                "maximum_pose_angular_speed_rad_s",
+                strictly_positive=True,
+            ),
+            "maximum pose angular speed",
+        )
+        require_equal(
+            tracking.pose_rate_failure_count,
+            summary_int(summary, "pose_rate_gate_failure_count"),
+            "pose rate gate failure count",
+        )
+        require_equal(
+            tracking.pose_rate_failure_after_acceptance_count,
+            summary_int(
+                summary,
+                "pose_rate_failure_after_acceptance_count",
+            ),
+            "pose rate failure after acceptance count",
+        )
+        require_close(
+            tracking.maximum_observed_pose_linear_speed_m_s,
+            parse_float(
+                require_scalar(
+                    summary,
+                    "maximum_observed_pose_linear_speed_m_s",
+                    "run summary",
+                ),
+                "maximum_observed_pose_linear_speed_m_s",
+                minimum=0.0,
+            ),
+            "maximum observed pose linear speed",
+        )
+        require_close(
+            tracking.maximum_observed_pose_angular_speed_rad_s,
+            parse_float(
+                require_scalar(
+                    summary,
+                    "maximum_observed_pose_angular_speed_rad_s",
+                    "run summary",
+                ),
+                "maximum_observed_pose_angular_speed_rad_s",
+                minimum=0.0,
+            ),
+            "maximum observed pose angular speed",
         )
     require_close(
         tracking.maximum_observed_tracking_interval_s,
@@ -1859,6 +2139,8 @@ def evaluate(args: argparse.Namespace) -> None:
         gate_failures.append("TRACKING_GAP_AFTER_ACCEPTANCE")
     if tracking.visual_support_failure_after_acceptance_count:
         gate_failures.append("VISUAL_SUPPORT_LOST_AFTER_ACCEPTANCE")
+    if tracking.pose_rate_failure_after_acceptance_count:
+        gate_failures.append("POSE_RATE_LIMIT_EXCEEDED_AFTER_ACCEPTANCE")
     if not tracking.accepted_timestamps_s:
         gate_failures.append("NO_ACCEPTED_TRAJECTORY_POSES")
     for field in clean_transport_fields:
@@ -1882,7 +2164,9 @@ def evaluate(args: argparse.Namespace) -> None:
             )
     else:
         continuity_envelope_state = (
-            "NOT_EVALUATED_NO_OPERATIONAL_ENVELOPE"
+            "PINNED_POSE_RATE_ENVELOPE_EVALUATED"
+            if pose_rate_contract
+            else "NOT_EVALUATED_NO_OPERATIONAL_ENVELOPE"
         )
 
     continuity_gate_failures = list(dict.fromkeys(gate_failures))
@@ -2050,6 +2334,11 @@ def evaluate(args: argparse.Namespace) -> None:
     maximum_speed = (
         0.0 if accepted is None else accepted.maximum_adjacent_speed_m_s
     )
+    maximum_angular_speed = (
+        0.0
+        if accepted is None
+        else accepted.maximum_adjacent_angular_speed_rad_s
+    )
     box = (
         (0.0, 0.0, 0.0)
         if accepted is None
@@ -2083,7 +2372,7 @@ def evaluate(args: argparse.Namespace) -> None:
     )
     result_lines = [
         "%YAML:1.0",
-        'format: "ovrs-orbslam3-live-evaluation-v7"',
+        'format: "ovrs-orbslam3-live-evaluation-v8"',
         f"state: {yaml_quote(state)}",
         f"live_gate_passed: {bool_yaml(evaluation_passed)}",
         "live_continuity_gate_passed: "
@@ -2134,6 +2423,23 @@ def evaluate(args: argparse.Namespace) -> None:
         f"minimum_tracked_map_points: {minimum_tracked_map_points}",
         "visual_support_failure_after_acceptance_count: "
         f"{tracking.visual_support_failure_after_acceptance_count}",
+        "pose_rate_contract_state: "
+        + yaml_quote(
+            "PINNED_LIVE_AND_RECOMPUTED"
+            if pose_rate_contract
+            else "LEGACY_NOT_EVALUATED"
+        ),
+        "maximum_pose_linear_speed_m_s: "
+        f"{maximum_pose_linear_speed_m_s if pose_rate_contract else 0.0:.9f}",
+        "maximum_observed_pose_linear_speed_m_s: "
+        f"{tracking.maximum_observed_pose_linear_speed_m_s:.9f}",
+        "maximum_pose_angular_speed_rad_s: "
+        f"{maximum_pose_angular_speed_rad_s if pose_rate_contract else 0.0:.9f}",
+        "maximum_observed_pose_angular_speed_rad_s: "
+        f"{tracking.maximum_observed_pose_angular_speed_rad_s:.9f}",
+        f"pose_rate_gate_failure_count: {tracking.pose_rate_failure_count}",
+        "pose_rate_failure_after_acceptance_count: "
+        f"{tracking.pose_rate_failure_after_acceptance_count}",
         "maximum_tracking_interval_seconds: "
         f"{maximum_tracking_interval_s:.9f}",
         "maximum_observed_tracking_interval_seconds: "
@@ -2157,6 +2463,8 @@ def evaluate(args: argparse.Namespace) -> None:
         f"canonical_endpoint_rotation_deg: {canonical_rotation:.9f}",
         f"canonical_maximum_adjacent_translation_m: {maximum_adjacent:.9f}",
         f"canonical_maximum_adjacent_speed_m_s: {maximum_speed:.9f}",
+        "canonical_maximum_adjacent_angular_speed_rad_s: "
+        f"{maximum_angular_speed:.9f}",
         f"canonical_bounding_box_x_m: {box[0]:.9f}",
         f"canonical_bounding_box_y_m: {box[1]:.9f}",
         f"canonical_bounding_box_z_m: {box[2]:.9f}",

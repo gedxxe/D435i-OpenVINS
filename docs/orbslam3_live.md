@@ -129,6 +129,19 @@ a terminal continuity failure and the candidate remains noncanonical. This is
 a support floor, not proof that the surviving correspondences are
 geometrically correct or that the pose is accurate.
 
+Bundle-v6 adds a second, independent continuity safeguard for finite pose
+jumps. Every pose-valid tracking row now records translation and quaternion
+components. The live gate computes sign-invariant quaternion deltas and
+rejects output above the backend-pinned 2.0 m/s linear or 6.0 rad/s angular
+rate. A reset, map boundary, pending reset, tracking interruption, or
+over-limit frame interval clears the comparison baseline rather than comparing
+two different map segments. Before canonical acceptance an over-limit sample
+restarts the full stability window; after acceptance it is terminal and is
+never written as a canonical pose. The retained v26 accepted trajectory peaked
+at 0.384 m/s and 1.822 rad/s. The wider pins are therefore discontinuity
+envelopes for this research workflow, not measured vehicle dynamics, motion
+commands, or trajectory-accuracy bounds.
+
 Do not move briefly and then pause to wait for initialization. In this pinned
 upstream logic, the local-mapping initialization clock advances only on
 keyframes whose recent two-step camera-centre translation exceeds 0.05 m. A
@@ -187,15 +200,20 @@ The live adapter applies all of these gates:
   terminal, and no subsequent pose can re-open the canonical stream;
 - a loop-closure/global-BA map change after candidate acceptance marks the
   streaming candidate discontinuous; the corrected map and continuous local
-  odometry are different frame contracts;
+  odometry are different frame contracts. Before acceptance, any map-change
+  index advance restarts the full stability window;
 - a reset request still pending at final shutdown fails. A pre-acceptance
   request may recover only if it is applied within the pinned retry bound and
-  later clears before a fresh BA2-stable window;
+  later clears before a fresh BA2-stable window; pending frames never preload
+  that timer;
 - an initialized-to-uninitialized or BA2-complete-to-incomplete regression is
   a failure;
 - a tracking loss, over-limit frame interval, reset, inertial regression, or
   map correction after acceptance permanently marks the candidate
   discontinuous;
+- a finite pose whose adjacent linear or angular rate exceeds the pinned
+  bundle-v6 envelope is noncanonical; it restarts pre-acceptance stability and
+  permanently rejects a post-acceptance candidate;
 - capture, timestamp, synchronization, queue, and image-integrity counters
   must remain clean.
 
@@ -207,12 +225,14 @@ atomically renames that file to `live_camera_trajectory_tum.txt`; a failed run
 has no canonical accepted trajectory file and retains `INCOMPLETE`.
 
 `live_tracking_states.csv` records inertial and BA2 state, reset count, active
-map change index, combined tracking/inertial stability duration, and per-frame
-startup-IMU state plus candidate acceptance. `run_summary.yaml` separately records total lost frames,
-post-acceptance loss and frame-gap counts, the configured interval limit, and
-the maximum observed interval. It also records tracking-latency mean/maximum,
-the nominal camera-frame budget, and the number/ratio of deadline misses. These
-are host diagnostics; Raspberry Pi 5 real-time claims still require the
+map change index, combined tracking/inertial stability duration, per-frame
+startup-IMU state, candidate acceptance, and—starting with bundle-v6—the raw
+pose components used for independent rate recomputation. `run_summary.yaml`
+separately records total lost frames, post-acceptance loss/frame-gap/rate
+failure counts, the configured interval and pose-rate limits, and their
+maximum observed values. It also records tracking-latency mean/maximum, the
+nominal camera-frame budget, and the number/ratio of deadline misses. These are
+host diagnostics; Raspberry Pi 5 real-time claims still require the
 research-plan resource benchmark.
 `live_imu_excitation.csv` records the synchronized IMU batch plus the exact ORB
 initialization delta/threshold diagnostic. `run_summary.yaml` is the terminal
@@ -311,24 +331,25 @@ The manifest reports continuity and physical-reference failures separately.
 its reset/tracking/timing contract but the endpoint hold or robust return
 check failed; it must not be described as a return-to-home pass.
 
-No motion-discontinuity threshold is silently hardcoded. An operational
-envelope may be supplied explicitly with
-`--maximum-adjacent-translation-m`; its origin and applicability must be
-justified by the experiment. Without it the manifest says
-`NOT_EVALUATED_NO_OPERATIONAL_ENVELOPE`.
+Bundle-v6 pins its live linear/angular rate envelope in the backend
+configuration and copies it through settings, manifest, runtime metadata, and
+summary; it is not an executable-only constant. A caller may still supply the
+stricter, supplementary `--maximum-adjacent-translation-m` experiment limit.
+Bundle-v4/v5 evidence has no capture-time pose-rate contract and remains
+labelled legacy-not-evaluated rather than inheriting the new limits.
 
 Passing the continuity gate without a physical start/end reference yields
 `LIVE_GATE_PASS_CONTINUITY_NOT_ACCURACY_VALIDATED`. Passing the recorded
 rigid-stop tolerances yields a stronger return-consistency state, but still
 does not establish full-trajectory accuracy without independent ground truth.
-New bundle-v5/runtime-provenance-v6 runs report `CAPTURE_TIME_ATTESTED`.
-Evaluator-v7 additionally recomputes the bounded pre-acceptance and strict
-zero-post-acceptance reset counts plus the minimum tracked-map-point contract
-from every tracking row. Bundle-v4/runtime-provenance-v5 runs remain
-re-evaluable under their original no-minimum-support contract; evaluator-v7
-reports their minimum as zero and does not retroactively upgrade their
-acceptance. A later binary must never be presented as an older run's
-capture-time executable.
+New bundle-v6/runtime-provenance-v7 runs report `CAPTURE_TIME_ATTESTED`.
+Evaluator-v8 additionally recomputes the bounded pre-acceptance and strict
+zero-post-acceptance reset counts, minimum tracked-map-point contract, and
+linear/angular pose-rate envelope from every tracking row. Bundle-v4 and
+bundle-v5 runs remain re-evaluable under their original contracts;
+evaluator-v8 reports pose-rate evaluation as legacy-disabled and does not
+retroactively upgrade their acceptance. A later binary must never be
+presented as an older run's capture-time executable.
 
 The live process also fails closed when either the raw stereo callback or raw
 IMU callback is silent for longer than the pinned

@@ -177,6 +177,8 @@ struct OrbLiveSettings {
   double maximum_tracking_interval_seconds = 0.0;
   double maximum_tracking_interval_factor = 0.0;
   std::uint64_t minimum_tracked_map_points = 0;
+  double maximum_pose_linear_speed_m_s = 0.0;
+  double maximum_pose_angular_speed_rad_s = 0.0;
   std::uint64_t maximum_preacceptance_map_resets = 0;
   double gravity_m_s2 = 0.0;
   double startup_maximum_gravity_error_m_s2 = 0.0;
@@ -241,6 +243,10 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
   }
   result.minimum_tracked_map_points =
       static_cast<std::uint64_t>(minimum_tracked_map_points);
+  result.maximum_pose_linear_speed_m_s =
+      required_setting<double>(storage, "OVRS.MaximumPoseLinearSpeed");
+  result.maximum_pose_angular_speed_rad_s =
+      required_setting<double>(storage, "OVRS.MaximumPoseAngularSpeed");
   const int maximum_preacceptance_map_resets = required_setting<int>(
       storage, "OVRS.MaximumPreacceptanceMapResets");
   if (maximum_preacceptance_map_resets < 0) {
@@ -284,6 +290,10 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
       result.maximum_tracking_interval_factor <= 1.0 ||
       result.maximum_tracking_interval_factor > 10.0 ||
       result.minimum_tracked_map_points > 10000 ||
+      !std::isfinite(result.maximum_pose_linear_speed_m_s) ||
+      result.maximum_pose_linear_speed_m_s <= 0.0 ||
+      !std::isfinite(result.maximum_pose_angular_speed_rad_s) ||
+      result.maximum_pose_angular_speed_rad_s <= 0.0 ||
       result.maximum_preacceptance_map_resets > 20 ||
       !std::isfinite(result.gravity_m_s2) || result.gravity_m_s2 <= 0.0 ||
       !std::isfinite(result.startup_maximum_gravity_error_m_s2) ||
@@ -541,7 +551,7 @@ int main(int argc, char **argv) {
     }
     for (const auto &[key, expected] :
          std::vector<std::pair<std::string, std::string>>{
-             {"format", "ovrs-orbslam3-live-bundle-v5"},
+             {"format", "ovrs-orbslam3-live-bundle-v6"},
              {"state", "PREPARED_NOT_RUN"},
              {"integration", "PURE_ORB_SLAM3_STEREO_INERTIAL"},
              {"openvins_pose_consumed", "false"},
@@ -553,6 +563,12 @@ int main(int argc, char **argv) {
              {"camera_stride", std::to_string(orb_settings.camera_stride)},
              {"minimum_tracked_map_points",
               std::to_string(orb_settings.minimum_tracked_map_points)},
+             {"maximum_pose_linear_speed_m_s",
+              std::to_string(
+                  orb_settings.maximum_pose_linear_speed_m_s)},
+             {"maximum_pose_angular_speed_rad_s",
+              std::to_string(
+                  orb_settings.maximum_pose_angular_speed_rad_s)},
              {"settings_sha256", settings_sha256}}) {
       require_yaml_value(live_manifest_text, key, expected,
                          "ORB live bundle manifest");
@@ -796,6 +812,8 @@ int main(int argc, char **argv) {
               "inertial_initialized,"
               "inertial_ba2_finished,active_map_reset_count,"
               "active_map_change_index,reset_pending,"
+              "pose_tx_m,pose_ty_m,pose_tz_m,"
+              "pose_qx,pose_qy,pose_qz,pose_qw,"
               "stable_gate_elapsed_s,"
               "trajectory_candidate_accepted\n";
     excitation
@@ -821,9 +839,14 @@ int main(int argc, char **argv) {
         orb_settings.minimum_stable_inertial_seconds,
         orb_settings.maximum_tracking_interval_seconds,
         orb_settings.maximum_preacceptance_map_resets);
+    ovrs::OrbPoseRateGate pose_rate_gate(
+        orb_settings.maximum_pose_linear_speed_m_s,
+        orb_settings.maximum_pose_angular_speed_rad_s);
+    std::optional<double> previous_tracking_timestamp_s;
     bool trajectory_acceptance_announced = false;
     std::uint64_t announced_active_map_reset_count = 0;
     bool weak_visual_support_announced = false;
+    bool implausible_pose_rate_announced = false;
     bool terminal_gate_stop_requested = false;
     ImuExcitationStats excitation_stats;
     ovrs::ImuStartupGate startup_gate(
@@ -940,6 +963,41 @@ int main(int argc, char **argv) {
           const bool visual_support_sufficient =
               current_tracking_pose_valid &&
               tracked_map_points >= orb_settings.minimum_tracked_map_points;
+          const bool current_tracking_gap =
+              previous_tracking_timestamp_s &&
+              frame.timestamp - *previous_tracking_timestamp_s >
+                  orb_settings.maximum_tracking_interval_seconds;
+          const bool pose_baseline_boundary =
+              !current_tracking_pose_valid || current_reset_pending ||
+              current_tracking_gap ||
+              current_active_map_reset_count !=
+                  trajectory_gate.active_map_reset_count() ||
+              current_active_map_change_index !=
+                  trajectory_gate.active_map_change_index();
+          if (pose_baseline_boundary) {
+            pose_rate_gate.reset();
+          }
+          std::optional<Sophus::SE3f> t_world_camera;
+          ovrs::OrbPoseRateStatus pose_rate_status;
+          if (current_tracking_pose_valid) {
+            t_world_camera = t_camera_world.inverse();
+            const auto translation = t_world_camera->translation();
+            const auto quaternion = t_world_camera->unit_quaternion();
+            pose_rate_status = pose_rate_gate.update(
+                frame.timestamp,
+                {static_cast<double>(translation.x()),
+                 static_cast<double>(translation.y()),
+                 static_cast<double>(translation.z())},
+                {static_cast<double>(quaternion.x()),
+                 static_cast<double>(quaternion.y()),
+                 static_cast<double>(quaternion.z()),
+                 static_cast<double>(quaternion.w())});
+          }
+          previous_tracking_timestamp_s = frame.timestamp;
+          const bool pose_rate_sufficient =
+              current_tracking_pose_valid &&
+              pose_rate_status.pose_finite_and_normalized &&
+              pose_rate_status.within_limits;
           const bool startup_imu_gate_passed =
               startup_gate.status().state ==
               ovrs::ImuStartupGateState::Passed;
@@ -957,7 +1015,7 @@ int main(int argc, char **argv) {
               current_active_map_reset_count,
               current_active_map_change_index,
               current_tracking_continuity, current_reset_pending,
-              visual_support_sufficient);
+              visual_support_sufficient, pose_rate_sufficient);
           if (current_active_map_reset_count >
               announced_active_map_reset_count) {
             announced_active_map_reset_count =
@@ -979,7 +1037,8 @@ int main(int argc, char **argv) {
             std::cout
                 << "ORB-SLAM3 canonical trajectory gate OPEN: inertial BA2 "
                    "is stable after bounded initialization retries, with no "
-                   "post-acceptance reset and sustained visual map support. "
+                   "post-acceptance reset, sustained visual map support, and "
+                   "bounded pose rates. "
                    "Begin any "
                    "closed-loop return-to-start motion only now.\n"
                 << std::flush;
@@ -999,6 +1058,22 @@ int main(int argc, char **argv) {
                 << std::flush;
           } else if (visual_support_sufficient) {
             weak_visual_support_announced = false;
+          }
+          if (!gate_status.acceptance_started &&
+              current_inertial_ba2_finished &&
+              current_tracking_pose_valid && !pose_rate_sufficient &&
+              !implausible_pose_rate_announced) {
+            implausible_pose_rate_announced = true;
+            std::cerr
+                << "ORB-SLAM3 initialization WAIT: pose output is invalid "
+                   "or exceeded the pinned rate envelope ("
+                << pose_rate_status.linear_speed_m_s << " m/s, "
+                << pose_rate_status.angular_speed_rad_s
+                << " rad/s). Continue smooth motion; canonical stability "
+                   "must be re-established.\n"
+                << std::flush;
+          } else if (pose_rate_sufficient) {
+            implausible_pose_rate_announced = false;
           }
           if (!terminal_gate_stop_requested &&
               trajectory_gate.preacceptance_reset_limit_exceeded()) {
@@ -1044,8 +1119,18 @@ int main(int argc, char **argv) {
                  << (current_inertial_ba2_finished ? 1 : 0) << ','
                  << current_active_map_reset_count << ','
                  << current_active_map_change_index << ','
-                 << (current_reset_pending ? 1 : 0) << ','
-                 << gate_status.stable_gate_elapsed_s << ','
+                 << (current_reset_pending ? 1 : 0);
+          if (t_world_camera) {
+            const auto translation = t_world_camera->translation();
+            const auto quaternion = t_world_camera->unit_quaternion();
+            states << ',' << translation.x() << ',' << translation.y() << ','
+                   << translation.z() << ',' << quaternion.x() << ','
+                   << quaternion.y() << ',' << quaternion.z() << ','
+                   << quaternion.w();
+          } else {
+            states << ",,,,,,,";
+          }
+          states << ',' << gate_status.stable_gate_elapsed_s << ','
                  << (gate_status.accept_pose ? 1 : 0) << '\n';
           excitation << std::fixed << std::setprecision(9)
                      << frame.timestamp << ',' << frame_imu.samples;
@@ -1082,10 +1167,10 @@ int main(int argc, char **argv) {
                      << current_active_map_reset_count << ','
                      << current_active_map_change_index << ','
                      << (current_reset_pending ? 1 : 0) << '\n';
-          if (current_tracking_pose_valid) {
-            const Sophus::SE3f t_world_camera = t_camera_world.inverse();
-            const auto translation = t_world_camera.translation();
-            const auto quaternion = t_world_camera.unit_quaternion();
+          if (current_tracking_pose_valid && t_world_camera &&
+              pose_rate_status.pose_finite_and_normalized) {
+            const auto translation = t_world_camera->translation();
+            const auto quaternion = t_world_camera->unit_quaternion();
             visual_trajectory
                 << frame.timestamp << ' ' << translation.x() << ' '
                 << translation.y() << ' ' << translation.z() << ' '
@@ -1197,7 +1282,7 @@ int main(int argc, char **argv) {
             "%YAML:1.0\n"
         "mode: \"experimental_pure_orbslam3_live\"\n"
         "runtime_provenance_format: "
-        "\"ovrs-orbslam3-live-runtime-provenance-v6\"\n"
+        "\"ovrs-orbslam3-live-runtime-provenance-v7\"\n"
         "openvins_pose_consumed: false\n"
         "global_correction_fed_to_openvins: false\n"
         "viewer: " +
@@ -1239,6 +1324,12 @@ int main(int argc, char **argv) {
                 orb_settings.maximum_tracking_interval_factor) +
             "\nminimum_tracked_map_points: " +
             std::to_string(orb_settings.minimum_tracked_map_points) +
+            "\nmaximum_pose_linear_speed_m_s: " +
+            std::to_string(
+                orb_settings.maximum_pose_linear_speed_m_s) +
+            "\nmaximum_pose_angular_speed_rad_s: " +
+            std::to_string(
+                orb_settings.maximum_pose_angular_speed_rad_s) +
             "\nmaximum_preacceptance_map_resets: " +
             std::to_string(
                 orb_settings.maximum_preacceptance_map_resets) +
@@ -1262,7 +1353,7 @@ int main(int argc, char **argv) {
             std::to_string(orb_settings.maximum_input_stall_seconds) +
             "\ntrajectory_acceptance_policy: "
             "\"startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
-            "visual_support_continuous_"
+            "visual_support_bounded_pose_rates_continuous_"
             "bounded_preacceptance_resets_zero_postacceptance_resets_"
             "no_postacceptance_map_correction\"\n"
             "closed_loop_reference_start_policy: "
@@ -1390,6 +1481,11 @@ int main(int argc, char **argv) {
       runtime_failure =
           "ORB-SLAM3 visual map support fell below the canonical continuity "
           "floor after trajectory acceptance";
+    } else if (
+        trajectory_gate.pose_rate_failure_after_acceptance_count() != 0) {
+      runtime_failure =
+          "ORB-SLAM3 pose rate exceeded the canonical continuity envelope "
+          "after trajectory acceptance";
     } else if (trajectory_gate.discontinuity_detected()) {
       runtime_failure =
           "ORB-SLAM3 trajectory discontinuity was detected";
@@ -1594,6 +1690,18 @@ int main(int argc, char **argv) {
         std::to_string(
             trajectory_gate
                 .maximum_observed_tracking_interval_seconds()) +
+        "\nmaximum_pose_linear_speed_m_s: " +
+        std::to_string(orb_settings.maximum_pose_linear_speed_m_s) +
+        "\nmaximum_observed_pose_linear_speed_m_s: " +
+        std::to_string(
+            pose_rate_gate.maximum_observed_linear_speed_m_s()) +
+        "\nmaximum_pose_angular_speed_rad_s: " +
+        std::to_string(orb_settings.maximum_pose_angular_speed_rad_s) +
+        "\nmaximum_observed_pose_angular_speed_rad_s: " +
+        std::to_string(
+            pose_rate_gate.maximum_observed_angular_speed_rad_s()) +
+        "\npose_rate_gate_failure_count: " +
+        std::to_string(pose_rate_gate.failure_count()) +
         "\ntracking_latency_samples: " +
         std::to_string(tracking_latency_stats.samples) +
         "\ntracking_latency_mean_ms: " +
@@ -1660,6 +1768,10 @@ int main(int argc, char **argv) {
         std::to_string(
             trajectory_gate
                 .visual_support_failure_after_acceptance_count()) +
+        "\npose_rate_failure_after_acceptance_count: " +
+        std::to_string(
+            trajectory_gate
+                .pose_rate_failure_after_acceptance_count()) +
         "\ntrajectory_acceptance_started: " +
         std::string(trajectory_gate.acceptance_started() ? "true"
                                                          : "false") +

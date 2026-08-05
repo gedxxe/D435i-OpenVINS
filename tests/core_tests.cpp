@@ -1111,6 +1111,34 @@ TEST_CASE("ORB trajectory gate recovers after a pre-acceptance pending reset") {
   REQUIRE(!gate.pending_reset_after_acceptance_observed());
 }
 
+TEST_CASE("ORB trajectory gate starts stability after pending reset clears") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0, 1);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  const auto pending =
+      gate.update(0.5, true, true, 0, 0, tracking, true);
+  REQUIRE(!pending.accept_pose);
+  REQUIRE_NEAR(pending.stable_gate_elapsed_s, 0.0, 1e-12);
+  const auto cleared =
+      gate.update(1.4, true, true, 0, 0, tracking, false);
+  REQUIRE(!cleared.accept_pose);
+  REQUIRE_NEAR(cleared.stable_gate_elapsed_s, 0.0, 1e-12);
+  REQUIRE(!gate.update(1.5, true, true, 0, 0, tracking).accept_pose);
+  REQUIRE(gate.update(2.4, true, true, 0, 0, tracking).accept_pose);
+}
+
+TEST_CASE("ORB trajectory gate restarts stability on pre-acceptance map change") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  const auto changed =
+      gate.update(0.8, true, true, 0, 1, tracking);
+  REQUIRE(!changed.accept_pose);
+  REQUIRE_NEAR(changed.stable_gate_elapsed_s, 0.0, 1e-12);
+  REQUIRE(!gate.update(1.0, true, true, 0, 1, tracking).accept_pose);
+  REQUIRE(gate.update(1.8, true, true, 0, 1, tracking).accept_pose);
+}
+
 TEST_CASE("ORB trajectory gate rejects BA2 regression after acceptance") {
   ovrs::OrbTrajectoryGate gate(1.0, 10.0);
   const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
@@ -1232,6 +1260,65 @@ TEST_CASE("ORB trajectory gate rejects weak visual support after acceptance") {
   REQUIRE(gate.visual_support_failure_after_acceptance_count() == 1);
   REQUIRE(!gate.update(1.2, true, true, 0, 0, ready, false, true)
                .accept_pose);
+}
+
+TEST_CASE("ORB pose rate gate handles quaternion sign and bounded motion") {
+  ovrs::OrbPoseRateGate gate(2.0, 6.0);
+  const auto first =
+      gate.update(1.0, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0});
+  REQUIRE(first.baseline_established);
+  REQUIRE(first.pose_finite_and_normalized);
+  REQUIRE(first.within_limits);
+  const auto second =
+      gate.update(1.1, {0.1, 0.0, 0.0}, {0.0, 0.0, 0.0, -1.0});
+  REQUIRE(second.within_limits);
+  REQUIRE_NEAR(second.linear_speed_m_s, 1.0, 1e-12);
+  REQUIRE_NEAR(second.angular_speed_rad_s, 0.0, 1e-12);
+  REQUIRE(gate.failure_count() == 0);
+}
+
+TEST_CASE("ORB pose rate gate rejects translation and rotation jumps") {
+  ovrs::OrbPoseRateGate gate(2.0, 6.0);
+  REQUIRE(gate.update(1.0, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0})
+              .within_limits);
+  const auto translation_jump =
+      gate.update(1.1, {0.3, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0});
+  REQUIRE(!translation_jump.within_limits);
+  REQUIRE_NEAR(translation_jump.linear_speed_m_s, 3.0, 1e-12);
+  const auto rotation_jump =
+      gate.update(1.2, {0.3, 0.0, 0.0},
+                  {0.0, 0.0, std::sin(0.4), std::cos(0.4)});
+  REQUIRE(!rotation_jump.within_limits);
+  REQUIRE_NEAR(rotation_jump.angular_speed_rad_s, 8.0, 1e-12);
+  REQUIRE(gate.failure_count() == 2);
+}
+
+TEST_CASE("ORB pose rate gate fails closed on invalid pose and resets") {
+  ovrs::OrbPoseRateGate gate(2.0, 6.0);
+  REQUIRE(gate.update(1.0, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0})
+              .within_limits);
+  const auto invalid =
+      gate.update(1.1, {std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0},
+                  {0.0, 0.0, 0.0, 1.0});
+  REQUIRE(!invalid.pose_finite_and_normalized);
+  REQUIRE(!invalid.within_limits);
+  REQUIRE(gate.update(1.2, {100.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0})
+              .within_limits);
+  REQUIRE(gate.failure_count() == 1);
+}
+
+TEST_CASE("ORB trajectory gate rejects pose rate failure after acceptance") {
+  ovrs::OrbTrajectoryGate gate(1.0, 1.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready, false, true, true)
+               .accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, ready, false, true, true)
+              .accept_pose);
+  const auto jump =
+      gate.update(1.1, true, true, 0, 0, ready, false, true, false);
+  REQUIRE(!jump.accept_pose);
+  REQUIRE(jump.discontinuity_detected);
+  REQUIRE(gate.pose_rate_failure_after_acceptance_count() == 1);
 }
 
 int main() { return test::run(); }

@@ -2,9 +2,132 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <stdexcept>
 
 namespace ovrs {
+
+namespace {
+
+constexpr double quaternion_norm_tolerance = 1e-3;
+
+bool finite_array(const std::array<double, 3> &values) {
+  return std::all_of(values.begin(), values.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+bool finite_array(const std::array<double, 4> &values) {
+  return std::all_of(values.begin(), values.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+} // namespace
+
+OrbPoseRateGate::OrbPoseRateGate(double maximum_linear_speed_m_s,
+                                 double maximum_angular_speed_rad_s)
+    : maximum_linear_speed_m_s_(maximum_linear_speed_m_s),
+      maximum_angular_speed_rad_s_(maximum_angular_speed_rad_s) {
+  if (!std::isfinite(maximum_linear_speed_m_s_) ||
+      maximum_linear_speed_m_s_ <= 0.0) {
+    throw std::invalid_argument(
+        "maximum ORB pose linear speed must be finite and positive");
+  }
+  if (!std::isfinite(maximum_angular_speed_rad_s_) ||
+      maximum_angular_speed_rad_s_ <= 0.0) {
+    throw std::invalid_argument(
+        "maximum ORB pose angular speed must be finite and positive");
+  }
+}
+
+OrbPoseRateStatus OrbPoseRateGate::update(
+    double timestamp_s, const std::array<double, 3> &translation_m,
+    const std::array<double, 4> &quaternion_xyzw) {
+  if (!std::isfinite(timestamp_s)) {
+    throw std::invalid_argument("ORB pose timestamp must be finite");
+  }
+  if (previous_timestamp_s_ && timestamp_s <= *previous_timestamp_s_) {
+    throw std::invalid_argument(
+        "ORB pose timestamps must be strictly increasing");
+  }
+
+  OrbPoseRateStatus result;
+  if (!finite_array(translation_m) || !finite_array(quaternion_xyzw)) {
+    ++failure_count_;
+    reset();
+    return result;
+  }
+  const double quaternion_norm = std::sqrt(
+      std::inner_product(quaternion_xyzw.begin(), quaternion_xyzw.end(),
+                         quaternion_xyzw.begin(), 0.0));
+  if (!std::isfinite(quaternion_norm) || quaternion_norm <= 0.0 ||
+      std::abs(quaternion_norm - 1.0) > quaternion_norm_tolerance) {
+    ++failure_count_;
+    reset();
+    return result;
+  }
+
+  std::array<double, 4> normalized_quaternion = quaternion_xyzw;
+  for (auto &value : normalized_quaternion) {
+    value /= quaternion_norm;
+  }
+  result.pose_finite_and_normalized = true;
+  if (!previous_timestamp_s_) {
+    previous_timestamp_s_ = timestamp_s;
+    previous_translation_m_ = translation_m;
+    previous_quaternion_xyzw_ = normalized_quaternion;
+    result.baseline_established = true;
+    result.within_limits = true;
+    return result;
+  }
+
+  const double delta_time_s = timestamp_s - *previous_timestamp_s_;
+  double translation_squared = 0.0;
+  for (std::size_t index = 0; index < translation_m.size(); ++index) {
+    const double delta = translation_m[index] - previous_translation_m_[index];
+    translation_squared += delta * delta;
+  }
+  result.translation_delta_m = std::sqrt(translation_squared);
+  double quaternion_dot = std::inner_product(
+      normalized_quaternion.begin(), normalized_quaternion.end(),
+      previous_quaternion_xyzw_.begin(), 0.0);
+  quaternion_dot = std::clamp(std::abs(quaternion_dot), 0.0, 1.0);
+  result.rotation_delta_rad = 2.0 * std::acos(quaternion_dot);
+  result.linear_speed_m_s = result.translation_delta_m / delta_time_s;
+  result.angular_speed_rad_s = result.rotation_delta_rad / delta_time_s;
+  maximum_observed_linear_speed_m_s_ =
+      std::max(maximum_observed_linear_speed_m_s_, result.linear_speed_m_s);
+  maximum_observed_angular_speed_rad_s_ =
+      std::max(maximum_observed_angular_speed_rad_s_,
+               result.angular_speed_rad_s);
+  result.baseline_established = true;
+  result.within_limits =
+      std::isfinite(result.linear_speed_m_s) &&
+      std::isfinite(result.angular_speed_rad_s) &&
+      result.linear_speed_m_s <= maximum_linear_speed_m_s_ &&
+      result.angular_speed_rad_s <= maximum_angular_speed_rad_s_;
+  if (!result.within_limits) {
+    ++failure_count_;
+  }
+
+  previous_timestamp_s_ = timestamp_s;
+  previous_translation_m_ = translation_m;
+  previous_quaternion_xyzw_ = normalized_quaternion;
+  return result;
+}
+
+void OrbPoseRateGate::reset() { previous_timestamp_s_.reset(); }
+
+double OrbPoseRateGate::maximum_observed_linear_speed_m_s() const {
+  return maximum_observed_linear_speed_m_s_;
+}
+
+double OrbPoseRateGate::maximum_observed_angular_speed_rad_s() const {
+  return maximum_observed_angular_speed_rad_s_;
+}
+
+std::uint64_t OrbPoseRateGate::failure_count() const {
+  return failure_count_;
+}
 
 OrbTrajectoryGate::OrbTrajectoryGate(
     double minimum_stable_inertial_seconds,
@@ -35,7 +158,8 @@ OrbTrajectoryGate::update(double timestamp_s, bool inertial_initialized,
                           std::uint64_t active_map_change_index,
                           OrbTrackingContinuityState tracking_state,
                           bool reset_pending,
-                          bool visual_support_sufficient) {
+                          bool visual_support_sufficient,
+                          bool pose_rate_sufficient) {
   if (!std::isfinite(timestamp_s)) {
     throw std::invalid_argument("ORB trajectory timestamp must be finite");
   }
@@ -79,6 +203,8 @@ OrbTrajectoryGate::update(double timestamp_s, bool inertial_initialized,
     if (acceptance_started_) {
       discontinuity_detected_ = true;
       map_change_after_acceptance_ = true;
+    } else {
+      stable_inertial_started_at_s_.reset();
     }
     active_map_change_index_ = active_map_change_index;
   }
@@ -129,10 +255,15 @@ OrbTrajectoryGate::update(double timestamp_s, bool inertial_initialized,
     discontinuity_detected_ = true;
     ++visual_support_failure_after_acceptance_count_;
   }
+  if (acceptance_started_ && tracking_ready &&
+      !pose_rate_sufficient) {
+    discontinuity_detected_ = true;
+    ++pose_rate_failure_after_acceptance_count_;
+  }
 
   const bool gate_ready =
       inertial_initialized && inertial_ba2_finished && tracking_ready &&
-      visual_support_sufficient;
+      visual_support_sufficient && pose_rate_sufficient && !reset_pending;
   if (gate_ready &&
       (!stable_inertial_started_at_s_ || tracking_gap)) {
     stable_inertial_started_at_s_ = timestamp_s;
@@ -242,6 +373,11 @@ OrbTrajectoryGate::tracking_gap_after_acceptance_count() const {
 std::uint64_t
 OrbTrajectoryGate::visual_support_failure_after_acceptance_count() const {
   return visual_support_failure_after_acceptance_count_;
+}
+
+std::uint64_t
+OrbTrajectoryGate::pose_rate_failure_after_acceptance_count() const {
+  return pose_rate_failure_after_acceptance_count_;
 }
 
 double

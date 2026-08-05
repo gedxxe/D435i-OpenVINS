@@ -876,6 +876,47 @@ hardening only. It does not establish correspondence correctness, trajectory
 accuracy, initialization repeatability, relocalization, or navigation/flight
 readiness.
 
+### 2026-08-05 finite pose-jump continuity hardening
+
+The canonical live path still had one downstream-output defect after the
+visual-support fix: any finite pose returned with `Tracking::OK` could be
+published even if its translation or orientation jumped implausibly between
+adjacent frames. The evaluator's optional adjacent-translation argument was
+post-run only, had no angular counterpart, and could not prevent a bad pose
+from entering the candidate stream.
+
+Bundle-v6/runtime-provenance-v7 now pins a 2.0 m/s linear and 6.0 rad/s angular
+pose-rate envelope. Pose-valid tracking rows retain translation and
+quaternion components; quaternion deltas are normalized and sign-invariant.
+Reset, map-boundary, pending-reset, tracking-interruption, and over-limit frame
+events clear the comparison baseline. An over-limit pre-acceptance sample
+restarts stability, while an over-limit post-acceptance sample is terminal and
+is not published as canonical. Evaluator-v8 independently recomputes both
+rates and cross-checks runtime counts and maxima.
+
+The audit also found that `reset_pending` prevented final acceptance but was
+not part of the stability predicate, allowing the timer to begin on the last
+pending frame. A pre-acceptance map-change index update likewise did not
+explicitly restart stability. Both now require a complete fresh stability
+window after the reset clears or the map frame changes, and the evaluator
+recomputes the same rule.
+
+The retained v26 accepted trace peaked at 0.383841 m/s and 1.821113 rad/s,
+well inside the new envelope. Its full pre-acceptance diagnostic trajectory
+contained map/inertial-frame transitions as high as 3.037643 m/s and
+47.652499 rad/s, confirming why comparison baselines must be reset at declared
+map/continuity boundaries rather than applying a naive whole-file threshold.
+These observations justify a broad discontinuity rejection envelope only.
+They do not measure platform dynamics or trajectory accuracy.
+
+Core tests cover bounded motion, quaternion sign equivalence, translation and
+rotation jumps, invalid-pose reset, and terminal post-acceptance rejection.
+The dependency-light evaluator suite contains 51 passing cases including
+legacy bundle-v4/v5 re-evaluation and independent attribution of a synthetic
+3 m/s jump. The actual ORB-linked executable compiled successfully. No
+connected D435i run has exercised bundle-v6, so live behavior, accuracy,
+repeatability, relocalization, and navigation readiness remain unvalidated.
+
 ## Historical evidence
 
 See [docs/audit_history.md](docs/audit_history.md) for the full chronology,

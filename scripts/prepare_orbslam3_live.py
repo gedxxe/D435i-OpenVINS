@@ -183,6 +183,26 @@ def prepare(args: argparse.Namespace) -> None:
             "backend pin live_minimum_tracked_map_points must be in "
             "(0, n_features]"
         )
+    maximum_pose_linear_speed_m_s = float(
+        parse_decimal(
+            pin.get("live_maximum_pose_linear_speed_m_s", ""),
+            "backend pin live_maximum_pose_linear_speed_m_s",
+        )
+    )
+    maximum_pose_angular_speed_rad_s = float(
+        parse_decimal(
+            pin.get("live_maximum_pose_angular_speed_rad_s", ""),
+            "backend pin live_maximum_pose_angular_speed_rad_s",
+        )
+    )
+    if maximum_pose_linear_speed_m_s <= 0.0:
+        raise BenchmarkError(
+            "backend pin live_maximum_pose_linear_speed_m_s must be positive"
+        )
+    if maximum_pose_angular_speed_rad_s <= 0.0:
+        raise BenchmarkError(
+            "backend pin live_maximum_pose_angular_speed_rad_s must be positive"
+        )
     maximum_preacceptance_map_resets = parse_int(
         pin.get("live_maximum_preacceptance_map_resets", ""),
         "backend pin live_maximum_preacceptance_map_resets",
@@ -258,6 +278,10 @@ def prepare(args: argparse.Namespace) -> None:
         f"{maximum_tracking_interval_factor}",
         "OVRS.MinimumTrackedMapPoints: "
         f"{minimum_tracked_map_points}",
+        "OVRS.MaximumPoseLinearSpeed: "
+        f"{maximum_pose_linear_speed_m_s}",
+        "OVRS.MaximumPoseAngularSpeed: "
+        f"{maximum_pose_angular_speed_rad_s}",
         "OVRS.MaximumPreacceptanceMapResets: "
         f"{maximum_preacceptance_map_resets}",
         'OVRS.TimeOffsetConvention: "t_imu=t_cam+timeshift_cam_imu"',
@@ -285,7 +309,7 @@ def prepare(args: argparse.Namespace) -> None:
     manifest = output / "live_manifest.yaml"
     manifest.write_text(
         "%YAML:1.0\n"
-        'format: "ovrs-orbslam3-live-bundle-v5"\n'
+        'format: "ovrs-orbslam3-live-bundle-v6"\n'
         'state: "PREPARED_NOT_RUN"\n'
         'integration: "PURE_ORB_SLAM3_STEREO_INERTIAL"\n'
         "openvins_pose_consumed: false\n"
@@ -307,6 +331,10 @@ def prepare(args: argparse.Namespace) -> None:
         f"{maximum_tracking_interval_seconds}\n"
         "minimum_tracked_map_points: "
         f"{minimum_tracked_map_points}\n"
+        "maximum_pose_linear_speed_m_s: "
+        f"{maximum_pose_linear_speed_m_s:.6f}\n"
+        "maximum_pose_angular_speed_rad_s: "
+        f"{maximum_pose_angular_speed_rad_s:.6f}\n"
         "maximum_preacceptance_map_resets: "
         f"{maximum_preacceptance_map_resets}\n"
         f"gravity_m_s2: {gravity_m_s2}\n"

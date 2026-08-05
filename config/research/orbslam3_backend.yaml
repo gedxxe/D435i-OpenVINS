@@ -18,6 +18,12 @@ live_maximum_tracking_interval_factor: 3.0
 # 139 after acceptance; 50 is deliberately conservative and is a continuity
 # floor, not an accuracy certificate.
 live_minimum_tracked_map_points: 50
+# Reject finite but implausible pose jumps before they enter the canonical
+# stream. The retained v26 accepted trace peaked at 0.384 m/s and 1.822 rad/s;
+# these wider bounds are an operational continuity envelope, not measured
+# platform dynamics or trajectory accuracy.
+live_maximum_pose_linear_speed_m_s: 2.0
+live_maximum_pose_angular_speed_rad_s: 6.0
 # ORB-SLAM3 may discard an uninitialized map before any canonical pose exists.
 # Bound those retries; every reset after trajectory acceptance remains fatal.
 live_maximum_preacceptance_map_resets: 5

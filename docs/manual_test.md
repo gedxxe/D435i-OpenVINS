@@ -370,10 +370,14 @@ for that exact hardware, configuration, and test.
 - [ ] No reset, pending reset, map change, tracking loss, over-limit frame
       interval, queue drop, timestamp rejection, or inertial-state regression
       occurred after canonical acceptance.
-- [ ] Every accepted tracking row met the bundle-v5
+- [ ] Every accepted tracking row from bundle-v5 or later met the
       `minimum_tracked_map_points` floor; any later weak-support row rejected
       the candidate instead of being reported as continuous trajectory
       evidence.
+- [ ] Every bundle-v6 accepted row remained within the pinned
+      `maximum_pose_linear_speed_m_s` and
+      `maximum_pose_angular_speed_rad_s` envelope; evaluator-v8 independently
+      recomputed both rates from the recorded pose fields.
 - [ ] The independent evaluator found nonoverlapping start/end windows with
       sufficient time coverage and samples.
 - [ ] Both endpoint windows stayed inside their predeclared position and

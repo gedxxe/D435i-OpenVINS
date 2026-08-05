@@ -1,9 +1,45 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
 namespace ovrs {
+
+struct OrbPoseRateStatus {
+  bool baseline_established = false;
+  bool pose_finite_and_normalized = false;
+  bool within_limits = false;
+  double translation_delta_m = 0.0;
+  double rotation_delta_rad = 0.0;
+  double linear_speed_m_s = 0.0;
+  double angular_speed_rad_s = 0.0;
+};
+
+class OrbPoseRateGate {
+public:
+  OrbPoseRateGate(double maximum_linear_speed_m_s,
+                  double maximum_angular_speed_rad_s);
+
+  OrbPoseRateStatus update(
+      double timestamp_s, const std::array<double, 3> &translation_m,
+      const std::array<double, 4> &quaternion_xyzw);
+  void reset();
+
+  double maximum_observed_linear_speed_m_s() const;
+  double maximum_observed_angular_speed_rad_s() const;
+  std::uint64_t failure_count() const;
+
+private:
+  double maximum_linear_speed_m_s_ = 0.0;
+  double maximum_angular_speed_rad_s_ = 0.0;
+  double maximum_observed_linear_speed_m_s_ = 0.0;
+  double maximum_observed_angular_speed_rad_s_ = 0.0;
+  std::uint64_t failure_count_ = 0;
+  std::optional<double> previous_timestamp_s_;
+  std::array<double, 3> previous_translation_m_{};
+  std::array<double, 4> previous_quaternion_xyzw_{};
+};
 
 enum class OrbTrackingContinuityState {
   NotReady,
@@ -31,7 +67,8 @@ public:
                                  std::uint64_t active_map_change_index,
                                  OrbTrackingContinuityState tracking_state,
                                  bool reset_pending = false,
-                                 bool visual_support_sufficient = true);
+                                 bool visual_support_sufficient = true,
+                                 bool pose_rate_sufficient = true);
 
   bool ever_inertial_initialized() const;
   bool inertial_initialized() const;
@@ -52,6 +89,7 @@ public:
   std::uint64_t tracking_loss_after_acceptance_count() const;
   std::uint64_t tracking_gap_after_acceptance_count() const;
   std::uint64_t visual_support_failure_after_acceptance_count() const;
+  std::uint64_t pose_rate_failure_after_acceptance_count() const;
   double maximum_observed_tracking_interval_seconds() const;
 
 private:
@@ -79,6 +117,7 @@ private:
   std::uint64_t tracking_loss_after_acceptance_count_ = 0;
   std::uint64_t tracking_gap_after_acceptance_count_ = 0;
   std::uint64_t visual_support_failure_after_acceptance_count_ = 0;
+  std::uint64_t pose_rate_failure_after_acceptance_count_ = 0;
 };
 
 } // namespace ovrs

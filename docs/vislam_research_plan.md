@@ -231,8 +231,9 @@ headless and diagnostic:
 - map construction and optimization cannot block the capture callback or
   ordered IMU/camera ingestion;
 - canonical output requires sustained, provenance-pinned visual map support
-  in addition to backend tracking state, inertial BA2, reset safety, and frame
-  continuity; the support floor is not an accuracy metric;
+  and bounded pose rates in addition to backend tracking state, inertial BA2,
+  reset safety, and frame continuity; these are rejection envelopes, not
+  accuracy metrics or platform-dynamics measurements;
 - map state and local odometry state remain separate.
 
 The intended transform contract is:
