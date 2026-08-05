@@ -28,7 +28,10 @@ of either 0.5 or 1.0 was not safe.
 `patches/librealsense-rsusb-gyro-sensitivity.patch` encodes the report field in
 its 0.1 units. The full Ubuntu build now always builds and loads this exact
 repository-local patched SDK; same-version libraries under `/usr/local` or
-other system paths are rejected.
+other system paths are rejected. The patch also rejects failed libusb
+initialization or enumeration before the SDK can dereference a null USB
+context. This preserves a clean diagnostic error when udev or USB access is
+unavailable.
 
 Connected capture `datasets/vio_rsusb_sensitivity_fix_20260729T1315Z` used
 firmware 5.17.3.10, sensitivity level 1, motion correction, Global Time, and
@@ -261,7 +264,7 @@ The selected files are bound to this review:
 | `post_rs_imu_candidate_a_imu.yaml` | `c23713d7830e2d76e7d281edb0f8decb192a7f740ef15af0927d38d2816fa830` |
 | `post_rs_imu_candidate_a_imucam.yaml` | `0e911d87f1d2f508de1e9504354272220a999e76d821c9e4dc6b3a6fd3006f4f` |
 | `config/sensors/realsense_streams_vio_90hz.yaml` | `c040d24b331c7c2e0e27ed39f329c52b8b2868795b0c9d76279bf521c4389f53` |
-| `patches/librealsense-rsusb-gyro-sensitivity.patch` | `0143655d0694cd2fc0f911b54ed38de98fbf08f61fd037c986e3e9c8872feba5` |
+| `patches/librealsense-rsusb-gyro-sensitivity.patch` | `bba36fac64f045dda5d6c9f2cf4422d74d31ee430070f715252f86b2b28e003f` |
 | `patches/openvins-zupt-velocity-constraint.patch` | `000c826231727ee10cf240d89469e956e44028ddaff5cf3ccb2c744b92368d37` |
 
 `scripts/verify_selected_runtime.sh` is the single executable check for this

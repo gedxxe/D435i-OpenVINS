@@ -8,7 +8,7 @@ namespace ovrs {
 
 enum class CapturePreviewAction { none, start, abort };
 
-// Main-thread-only OpenCV preview used before and during calibration capture.
+// Main-thread-only OpenCV preview used before and during stereo capture.
 // RealSense callbacks publish owned StereoFrame objects through a bounded
 // queue; they never call HighGUI.
 class StereoCapturePreview {

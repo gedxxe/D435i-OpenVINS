@@ -25,7 +25,9 @@ public:
     std::uint64_t rejected_nonmonotonic = 0;
     std::uint64_t dropped_imu = 0;
     std::uint64_t dropped_stereo = 0;
+    std::uint64_t stereo_before_imu_start = 0;
     std::uint64_t stereo_without_imu_coverage = 0;
+    std::uint64_t stereo_discarded_on_shutdown = 0;
   };
 
   MeasurementDispatcher(std::size_t imu_capacity, std::size_t stereo_capacity,

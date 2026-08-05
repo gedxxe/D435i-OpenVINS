@@ -1,5 +1,5 @@
 diff --git a/src/hid/hid-device.cpp b/src/hid/hid-device.cpp
-index e73bbc762..bc8bdf947 100644
+index e73bbc762..6ff071783 100644
 --- a/src/hid/hid-device.cpp
 +++ b/src/hid/hid-device.cpp
 @@ -331,10 +331,13 @@ namespace librealsense
@@ -18,3 +18,30 @@ index e73bbc762..bc8bdf947 100644
  
  
              res = dev->control_transfer(USB_REQUEST_CODE_SET,
+diff --git a/src/libusb/context-libusb.cpp b/src/libusb/context-libusb.cpp
+index e8ea8be83..3b1fdc47b 100644
+--- a/src/libusb/context-libusb.cpp
++++ b/src/libusb/context-libusb.cpp
+@@ -13,9 +13,20 @@ namespace librealsense
+             auto sts = libusb_init(&_ctx);
+             if(sts != LIBUSB_SUCCESS)
+             {
+-                LOG_ERROR("libusb_init failed");
++                throw std::runtime_error(
++                    std::string("libusb_init failed: ")
++                    + libusb_error_name(sts));
+             }
+-            _count = libusb_get_device_list(_ctx, &_list);
++            const auto count = libusb_get_device_list(_ctx, &_list);
++            if(count < 0)
++            {
++                libusb_exit(_ctx);
++                _ctx = NULL;
++                throw std::runtime_error(
++                    std::string("libusb_get_device_list failed: ")
++                    + libusb_error_name(static_cast<int>(count)));
++            }
++            _count = static_cast<size_t>(count);
+         }
+         
+         usb_context::~usb_context()

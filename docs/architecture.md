@@ -26,6 +26,13 @@ SDK-reported D435i, optionally narrowed by serial. Its callback validates
 timestamps and frames, copies each Y8 buffer once into reference-counted owned
 memory, and invokes enqueue callbacks. No estimator method runs there.
 
+Recorder preview follows the same boundary. HighGUI runs only on the main
+thread. Before recording it uses a disposable preview-only RealSense pipeline;
+Space stops that pipeline before dataset creation. During recording it displays
+the latest owned stereo pair after the main thread drains the bounded queue.
+Closing the preview aborts the capture and keeps the dataset marked
+`INCOMPLETE`.
+
 `ImuSynchronizer` retains ordered accelerometer and gyro samples. A gyro is
 emitted only after two acceleration measurements bracket it. `StereoSynchronizer`
 accepts only camera 0/1 from the same frameset within tolerance.
@@ -124,7 +131,8 @@ librealsense v2.57.3 is pinned because its release line explicitly includes
 Ubuntu 24.04. The supported build always uses its repository-local RSUSB
 checkout with `patches/librealsense-rsusb-gyro-sensitivity.patch`; a system
 library is not accepted by version alone. The patch corrects host-side
-feature-report encoding and does not patch kernel modules, firmware, or EEPROM.
+feature-report encoding and rejects invalid libusb contexts before device
+enumeration. It does not patch kernel modules, firmware, or EEPROM.
 Dependency commits and reviewed patch hashes are pinned together in
 `cmake/DependencyVersions.cmake`.
 
@@ -142,3 +150,63 @@ The trajectory file uses TUM's eight-column syntax but preserves this native
 JPL convention. It does not perform a Hamilton inversion or NED/FRD conversion.
 Covariance is the real 15-state OpenVINS marginal in order orientation,
 position, velocity, gyro bias, accelerometer bias.
+
+## Offline markerless-SLAM boundary
+
+The v0.6.0 research branch adds a backend-neutral path beside, not inside, the
+live estimator:
+
+```text
+complete OVRS VIO dataset
+          |
+          v
+fail-closed EuRoC export + immutable source hashes
+          |
+          +--> OpenVINS baseline
+          +--> ORB-SLAM3 adapter       (offline baseline and isolated
+                                        experimental live path implemented)
+          `--> OKVIS2 adapter          (planned)
+```
+
+`scripts/export_vislam_benchmark.py` does not import a SLAM library and does
+not alter OpenVINS state. It validates capture integrity, converts normalized
+decimal seconds to integer nanoseconds, gives a stereo pair one midpoint
+timestamp, and exports synchronized gyro-frame IMU measurements. Backend
+configuration and camera/IMU transform conversion remain explicit adapter
+responsibilities. `scripts/prepare_orbslam3_benchmark.py` implements the first
+such boundary without linking ORB-SLAM3 into the project. It shifts camera
+labels into the IMU clock with the selected fixed offset, leaves IMU timestamps
+unchanged, derives both transform directions explicitly, and hashes the
+generated settings and indexes.
+
+`scripts/run_orbslam3_benchmark.py` captures the backend log and exit status.
+`scripts/evaluate_orbslam3_run.py` then validates trajectory structure,
+terminal input coverage, inertial BA completion, resets, tracking failures,
+atlas-manifest compatibility, exact ELF backend-library resolution, and
+pinned-backend loop/merge messages before writing a hashed result manifest.
+Accuracy remains unevaluated unless a separate start/end reference is supplied
+and explicitly marked as unavailable to the estimator. See
+[the ORB-SLAM3 offline baseline](orbslam3_offline.md).
+The isolated [live ORB-SLAM3 adapter](orbslam3_live.md) reuses project capture
+and ordering but does not consume or correct the OpenVINS state. It therefore
+remains pure ORB-SLAM3 rather than the future `T_map_odom` hybrid. Its
+canonical trajectory is published only after inertial BA2 completes and the
+combined inertial-ready state remains stable with zero active-map resets.
+Pre-BA2 visual poses remain in a separate diagnostic file. Any reset,
+inertial/BA2 regression, or loop/global-BA map change after acceptance rejects
+the candidate instead of joining discontinuous map-local pose segments.
+
+A future globally corrected pose must preserve two frames:
+
+```math
+T_{\mathrm{map}\leftarrow\mathrm{body}}
+=
+T_{\mathrm{map}\leftarrow\mathrm{odom}}
+T_{\mathrm{odom}\leftarrow\mathrm{body}}.
+```
+
+The local `odom` pose must remain continuous. Relocalization and loop closure
+may update the `map` to `odom` transform only after place recognition and
+geometric verification. They must not silently overwrite the OpenVINS filter
+state. The complete research gates are in
+[the markerless VSLAM plan](vislam_research_plan.md).

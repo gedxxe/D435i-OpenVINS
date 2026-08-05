@@ -5,8 +5,10 @@
 #include "ovrs/calibration_validation.hpp"
 #include "ovrs/capture_mode.hpp"
 #include "ovrs/config.hpp"
+#include "ovrs/imu_startup_gate.hpp"
 #include "ovrs/imu_synchronizer.hpp"
 #include "ovrs/measurement_dispatcher.hpp"
+#include "ovrs/orb_trajectory_gate.hpp"
 #include "ovrs/realsense_source.hpp"
 #include "ovrs/stereo_synchronizer.hpp"
 #include "ovrs/timestamp_normalizer.hpp"
@@ -50,6 +52,50 @@ ovrs::TimedVec3 timed(double timestamp, double raw_timestamp_ms, ovrs::Vec3 valu
 }
 
 } // namespace
+
+TEST_CASE("IMU startup gate accepts a stable gravity window") {
+  ovrs::ImuStartupGate gate(9.80665, 2.0, 1.0, 3.0, 0.25, 0.1);
+  ovrs::ImuStartupGateStatus status;
+  for (int index = 0; index <= 200; ++index) {
+    ovrs::ImuSample sample;
+    sample.timestamp = index / 200.0;
+    sample.linear_acceleration_m_s2 =
+        {0.0, 0.0, 9.9 + (index % 2 == 0 ? 0.01 : -0.01)};
+    sample.angular_velocity_rad_s = {0.001, 0.0, 0.0};
+    status = gate.add(sample);
+  }
+  REQUIRE(status.state == ovrs::ImuStartupGateState::Passed);
+  REQUIRE(status.samples == 201);
+  REQUIRE(status.gravity_error_m_s2 < 0.1);
+  REQUIRE(status.acceleration_magnitude_stddev_m_s2 < 0.02);
+}
+
+TEST_CASE("IMU startup gate rejects stable twice-gravity device state") {
+  ovrs::ImuStartupGate gate(9.80665, 2.0, 1.0, 3.0, 0.25, 0.1);
+  ovrs::ImuStartupGateStatus status;
+  for (int index = 0; index <= 200; ++index) {
+    ovrs::ImuSample sample;
+    sample.timestamp = index / 200.0;
+    sample.linear_acceleration_m_s2 = {0.0, 19.95, 0.0};
+    status = gate.add(sample);
+  }
+  REQUIRE(status.state == ovrs::ImuStartupGateState::GravityMismatch);
+  REQUIRE(status.gravity_error_m_s2 > 9.0);
+}
+
+TEST_CASE("IMU startup gate restarts on motion and times out fail closed") {
+  ovrs::ImuStartupGate gate(9.80665, 2.0, 1.0, 1.5, 0.25, 0.1);
+  ovrs::ImuStartupGateStatus status;
+  for (int index = 0; index <= 300; ++index) {
+    ovrs::ImuSample sample;
+    sample.timestamp = index / 200.0;
+    sample.linear_acceleration_m_s2 = {0.0, 0.0, 9.80665};
+    sample.angular_velocity_rad_s = {0.2, 0.0, 0.0};
+    status = gate.add(sample);
+  }
+  REQUIRE(status.state == ovrs::ImuStartupGateState::StationaryTimeout);
+  REQUIRE(status.rejected_dynamic_windows == 0);
+}
 
 TEST_CASE("timestamp normalization and domain enforcement") {
   ovrs::TimestampNormalizer normalizer;
@@ -161,6 +207,7 @@ TEST_CASE("capture modes have explicit non-ambiguous stream plans") {
   const auto vio = ovrs::capture_plan("vio");
   REQUIRE(vio.has_value());
   REQUIRE(vio->enable_stereo);
+  REQUIRE(vio->supports_preview);
   REQUIRE(vio->enable_motion);
   REQUIRE(vio->write_synchronized_imu);
   REQUIRE(vio->replay_compatible);
@@ -170,6 +217,7 @@ TEST_CASE("capture modes have explicit non-ambiguous stream plans") {
   const auto allan = ovrs::capture_plan("imu-allan");
   REQUIRE(allan.has_value());
   REQUIRE(!allan->enable_stereo);
+  REQUIRE(!allan->supports_preview);
   REQUIRE(allan->enable_motion);
   REQUIRE(allan->write_synchronized_imu);
   REQUIRE(allan->requires_stationary_sensor);
@@ -179,6 +227,7 @@ TEST_CASE("capture modes have explicit non-ambiguous stream plans") {
   const auto stereo = ovrs::capture_plan("stereo-calibration");
   REQUIRE(stereo.has_value());
   REQUIRE(stereo->enable_stereo);
+  REQUIRE(stereo->supports_preview);
   REQUIRE(!stereo->enable_motion);
   REQUIRE(!stereo->write_synchronized_imu);
   REQUIRE(stereo->requires_calibration_target);
@@ -187,6 +236,7 @@ TEST_CASE("capture modes have explicit non-ambiguous stream plans") {
   const auto imucam = ovrs::capture_plan("imu-camera-calibration");
   REQUIRE(imucam.has_value());
   REQUIRE(imucam->enable_stereo);
+  REQUIRE(imucam->supports_preview);
   REQUIRE(imucam->enable_motion);
   REQUIRE(imucam->requires_calibration_target);
   REQUIRE(!imucam->requires_stationary_sensor);
@@ -916,7 +966,7 @@ TEST_CASE("ordered dispatcher waits for IMU coverage and shuts down") {
   REQUIRE(dispatcher.stats().dispatched_stereo == 1);
 }
 
-TEST_CASE("dispatcher rejects an image without an earlier IMU sample") {
+TEST_CASE("dispatcher reports an image before IMU startup separately") {
   std::size_t camera_count = 0;
   ovrs::MeasurementDispatcher dispatcher(
       4, 2, [](const ovrs::ImuSample &) {}, [&](const ovrs::StereoFrame &) { ++camera_count; });
@@ -929,7 +979,8 @@ TEST_CASE("dispatcher rejects an image without an earlier IMU sample") {
   REQUIRE(dispatcher.push_imu(after));
   dispatcher.stop();
   REQUIRE(camera_count == 0);
-  REQUIRE(dispatcher.stats().stereo_without_imu_coverage == 1);
+  REQUIRE(dispatcher.stats().stereo_before_imu_start == 1);
+  REQUIRE(dispatcher.stats().stereo_without_imu_coverage == 0);
 }
 
 TEST_CASE("dispatcher reuses an existing IMU bracket for close images") {
@@ -955,6 +1006,203 @@ TEST_CASE("dispatcher reuses an existing IMU bracket for close images") {
   REQUIRE_NEAR(camera_times[0], 0.015, 1e-12);
   REQUIRE_NEAR(camera_times[1], 0.018, 1e-12);
   REQUIRE(dispatcher.stats().stereo_without_imu_coverage == 0);
+}
+
+TEST_CASE("dispatcher reports a trailing image separately at shutdown") {
+  std::size_t camera_count = 0;
+  ovrs::MeasurementDispatcher dispatcher(
+      4, 2, [](const ovrs::ImuSample &) {},
+      [&](const ovrs::StereoFrame &) { ++camera_count; });
+  dispatcher.start();
+  ovrs::ImuSample before;
+  before.timestamp = 0.01;
+  REQUIRE(dispatcher.push_imu(before));
+  ovrs::StereoFrame frame;
+  frame.timestamp = 0.02;
+  REQUIRE(dispatcher.push_stereo(frame));
+  dispatcher.stop();
+  REQUIRE(camera_count == 0);
+  REQUIRE(dispatcher.stats().stereo_without_imu_coverage == 0);
+  REQUIRE(dispatcher.stats().stereo_discarded_on_shutdown == 1);
+}
+
+TEST_CASE("ORB trajectory gate waits for continuous inertial stability") {
+  ovrs::OrbTrajectoryGate gate(3.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, false, false, 0, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(1.0, true, false, 0, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(2.0, true, true, 0, 0, tracking).accept_pose);
+  const auto almost_stable =
+      gate.update(4.999, true, true, 0, 0, tracking);
+  REQUIRE(!almost_stable.accept_pose);
+  REQUIRE_NEAR(almost_stable.stable_gate_elapsed_s, 2.999, 1e-12);
+  const auto stable = gate.update(5.0, true, true, 0, 0, tracking);
+  REQUIRE(stable.accept_pose);
+  REQUIRE(stable.acceptance_started);
+  REQUIRE(gate.ever_inertial_initialized());
+  REQUIRE(gate.inertial_initialized());
+  REQUIRE(gate.ever_inertial_ba2_finished());
+  REQUIRE(gate.inertial_ba2_finished());
+}
+
+TEST_CASE("ORB trajectory gate permits bounded pre-init map reset recovery") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0, 2);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, false, false, 0, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(0.5, false, false, 1, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(1.0, true, true, 1, 0, tracking).accept_pose);
+  REQUIRE(gate.update(2.0, true, true, 1, 0, tracking).accept_pose);
+  REQUIRE(gate.acceptance_started());
+  REQUIRE(!gate.discontinuity_detected());
+  REQUIRE(gate.active_map_reset_count() == 1);
+  REQUIRE(gate.preacceptance_map_reset_count() == 1);
+  REQUIRE(gate.postacceptance_map_reset_count() == 0);
+  REQUIRE(!gate.preacceptance_reset_limit_exceeded());
+}
+
+TEST_CASE("ORB trajectory gate rejects excessive pre-init map resets") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0, 1);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, false, false, 0, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(0.5, false, false, 2, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(1.0, true, true, 2, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(3.0, true, true, 2, 0, tracking).accept_pose);
+  REQUIRE(!gate.acceptance_started());
+  REQUIRE(gate.preacceptance_reset_limit_exceeded());
+}
+
+TEST_CASE("ORB trajectory gate permanently rejects post-acceptance reset") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, tracking).accept_pose);
+  const auto reset = gate.update(2.0, false, false, 1, 0, tracking);
+  REQUIRE(!reset.accept_pose);
+  REQUIRE(reset.discontinuity_detected);
+  REQUIRE(gate.preacceptance_map_reset_count() == 0);
+  REQUIRE(gate.postacceptance_map_reset_count() == 1);
+  REQUIRE(gate.inertial_regression_count() == 1);
+  REQUIRE(gate.inertial_ba2_regression_count() == 1);
+  REQUIRE(!gate.update(3.0, true, true, 1, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(5.0, true, true, 1, 0, tracking).accept_pose);
+}
+
+TEST_CASE("ORB trajectory gate rejects inertial regression without map reset") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, tracking).accept_pose);
+  const auto regression = gate.update(2.0, false, true, 0, 0, tracking);
+  REQUIRE(!regression.accept_pose);
+  REQUIRE(regression.discontinuity_detected);
+  REQUIRE(gate.inertial_regression_count() == 1);
+  REQUIRE(!gate.update(4.0, true, true, 0, 0, tracking).accept_pose);
+}
+
+TEST_CASE("ORB trajectory gate recovers after a pre-acceptance pending reset") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0, 1);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  REQUIRE(!gate.update(0.5, true, true, 0, 0, tracking, true).accept_pose);
+  REQUIRE(gate.pending_reset_observed());
+  REQUIRE(!gate.update(2.0, true, true, 1, 0, tracking).accept_pose);
+  REQUIRE(gate.update(3.0, true, true, 1, 0, tracking).accept_pose);
+  REQUIRE(gate.active_map_reset_count() == 1);
+  REQUIRE(!gate.pending_reset_after_acceptance_observed());
+}
+
+TEST_CASE("ORB trajectory gate rejects BA2 regression after acceptance") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, tracking).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, tracking).accept_pose);
+  const auto regression = gate.update(2.0, true, false, 0, 0, tracking);
+  REQUIRE(!regression.accept_pose);
+  REQUIRE(regression.discontinuity_detected);
+  REQUIRE(gate.inertial_ba2_regression_count() == 1);
+}
+
+TEST_CASE("ORB trajectory gate rejects global map correction after acceptance") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 2, tracking).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 2, tracking).accept_pose);
+  const auto correction = gate.update(2.0, true, true, 0, 3, tracking);
+  REQUIRE(!correction.accept_pose);
+  REQUIRE(correction.discontinuity_detected);
+  REQUIRE(gate.map_change_after_acceptance());
+  REQUIRE(gate.active_map_change_index() == 3);
+}
+
+TEST_CASE("ORB trajectory gate allows map index restart with counted reset") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto tracking = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 4, tracking).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 4, tracking).accept_pose);
+  const auto reset = gate.update(2.0, false, false, 1, 0, tracking);
+  REQUIRE(!reset.accept_pose);
+  REQUIRE(reset.discontinuity_detected);
+  REQUIRE(gate.active_map_reset_count() == 1);
+  REQUIRE(gate.active_map_change_index() == 0);
+}
+
+TEST_CASE("ORB trajectory gate requires tracking throughout stability window") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  const auto not_ready = ovrs::OrbTrackingContinuityState::NotReady;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, not_ready).accept_pose);
+  REQUIRE(!gate.update(0.5, true, true, 0, 0, ready).accept_pose);
+  const auto interrupted =
+      gate.update(1.0, true, true, 0, 0, not_ready);
+  REQUIRE(!interrupted.accept_pose);
+  REQUIRE_NEAR(interrupted.stable_gate_elapsed_s, 0.0, 1e-12);
+  REQUIRE(!gate.update(1.5, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(gate.update(2.5, true, true, 0, 0, ready).accept_pose);
+}
+
+TEST_CASE("ORB trajectory gate permanently rejects tracking loss after acceptance") {
+  ovrs::OrbTrajectoryGate gate(1.0, 10.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  const auto lost = ovrs::OrbTrackingContinuityState::Lost;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, ready).accept_pose);
+  const auto first_lost = gate.update(2.0, true, true, 0, 0, lost);
+  REQUIRE(!first_lost.accept_pose);
+  REQUIRE(first_lost.discontinuity_detected);
+  REQUIRE(gate.tracking_loss_after_acceptance_count() == 1);
+  REQUIRE(!gate.update(3.0, true, true, 0, 0, lost).accept_pose);
+  REQUIRE(gate.tracking_loss_after_acceptance_count() == 2);
+  REQUIRE(!gate.update(4.0, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(gate.tracking_loss_after_acceptance_count() == 2);
+}
+
+TEST_CASE("ORB trajectory gate restarts stability after a pre-acceptance gap") {
+  ovrs::OrbTrajectoryGate gate(1.0, 0.21);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready).accept_pose);
+  const auto gap = gate.update(0.5, true, true, 0, 0, ready);
+  REQUIRE(!gap.accept_pose);
+  REQUIRE_NEAR(gap.stable_gate_elapsed_s, 0.0, 1e-12);
+  REQUIRE(!gate.update(0.6, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(!gate.update(0.8, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(!gate.update(1.0, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(!gate.update(1.2, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(!gate.update(1.4, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(gate.update(1.5, true, true, 0, 0, ready).accept_pose);
+  REQUIRE_NEAR(
+      gate.maximum_observed_tracking_interval_seconds(), 0.5, 1e-12);
+}
+
+TEST_CASE("ORB trajectory gate permanently rejects a post-acceptance gap") {
+  ovrs::OrbTrajectoryGate gate(1.0, 1.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready).accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, ready).accept_pose);
+  const auto gap = gate.update(2.1, true, true, 0, 0, ready);
+  REQUIRE(!gap.accept_pose);
+  REQUIRE(gap.discontinuity_detected);
+  REQUIRE(gate.tracking_gap_after_acceptance_count() == 1);
+  REQUIRE(!gate.update(2.2, true, true, 0, 0, ready).accept_pose);
 }
 
 int main() { return test::run(); }

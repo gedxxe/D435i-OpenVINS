@@ -45,7 +45,9 @@ permissions problem.
 `FORCE_RSUSB_BACKEND=ON` under `.deps`. It applies and verifies
 `patches/librealsense-rsusb-gyro-sensitivity.patch`, which preserves dynamic
 gyro-sensitivity values when the RSUSB backend encodes the unsigned feature
-report. The patch SHA-256 is pinned beside the dependency commit in
+report and converts failed libusb initialization or enumeration into a clean
+backend error instead of a null-context crash. The patch SHA-256 is pinned
+beside the dependency commit in
 `cmake/DependencyVersions.cmake` and is checked before its content can enter a
 build. Optional tools, examples, tests, graphical and Python extensions,
 update checks, the all-in-one static bundle, and firmware downloads are
@@ -99,9 +101,23 @@ python3 -m venv .venv
 
 `requirements.txt` pins Matplotlib, its direct runtime dependency set, and
 PyYAML for CPython 3.11-3.13. Summary-only plotting, capture export, and basic
-metadata validation use the standard library; Kalibr YAML validation,
+metadata validation use the standard library. The markerless VSLAM benchmark
+exporter is also standard-library-only; external SLAM backends are not Python
+dependencies of this repository. The ORB-SLAM3 adapter is likewise
+standard-library-only. Its pinned external source and build remain in the
+ignored `.deps/` tree and are covered in
+[the offline backend notes](orbslam3_offline.md). Atlas-enabled experiments
+also require the reviewed serialization-integrity patch pinned in
+`config/research/orbslam3_backend.yaml`; adapter preparation verifies its
+SHA-256 before creating an experiment directory. Kalibr YAML validation,
 promotion, and legacy transform migration require PyYAML. `.venv/` is ignored
 by Git.
+
+When the optional live ORB-SLAM3 executable is enabled, it links only the
+system OpenSSL `Crypto` component from the already required `libssl-dev`
+package. This records capture-time SHA-256 provenance for the executable,
+backend library, vocabulary, settings, and bundle; it is not used for
+networking or estimator logic.
 
 Kalibr and `allan_variance_ros` are external calibration tools, not runtime
 dependencies. They require a separate supported ROS1 environment. Docker is

@@ -16,6 +16,7 @@ CapturePlan capture_plan(CaptureMode mode) {
             true,
             true,
             true,
+            true,
             false,
             false,
             true,
@@ -24,6 +25,7 @@ CapturePlan capture_plan(CaptureMode mode) {
             "standalone stereo visual-inertial dataset"};
   case CaptureMode::ImuAllan:
     return {mode,
+            false,
             false,
             true,
             true,
@@ -36,6 +38,7 @@ CapturePlan capture_plan(CaptureMode mode) {
   case CaptureMode::StereoCalibration:
     return {mode,
             true,
+            true,
             false,
             false,
             false,
@@ -46,6 +49,7 @@ CapturePlan capture_plan(CaptureMode mode) {
             "stereo camera intrinsics and extrinsics calibration"};
   case CaptureMode::ImuCameraCalibration:
     return {mode,
+            true,
             true,
             true,
             true,

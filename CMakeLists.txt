@@ -38,6 +38,8 @@ option(OVRS_ENABLE_HARDWARE "Build librealsense2 capture support"
 option(OVRS_ENABLE_OPENVINS
        "Build the pinned OpenVINS ${OVRS_OPENVINS_TAG} estimator wrapper"
        ${_ovrs_hardware_default})
+option(OVRS_ENABLE_ORBSLAM3
+       "Build the experimental pinned ORB-SLAM3 live adapter" OFF)
 option(OVRS_BUILD_TESTS "Build non-hardware tests" ON)
 option(OVRS_ENABLE_SANITIZERS "Enable ASan and UBSan for project code" OFF)
 set(OVRS_OPENVINS_PREFIX "" CACHE PATH
@@ -48,6 +50,24 @@ set(OVRS_CERES_PREFIX
 set(OVRS_REALSENSE_PREFIX
     "${CMAKE_CURRENT_SOURCE_DIR}/.deps/install/librealsense" CACHE PATH
     "Repository-local patched librealsense ${OVRS_LIBREALSENSE_VERSION} prefix")
+set(OVRS_ORBSLAM3_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/orb_slam3" CACHE PATH
+    "Pinned and reviewed ORB-SLAM3 source checkout")
+set(OVRS_ORBSLAM3_LIBRARY
+    "${OVRS_ORBSLAM3_SOURCE}/lib/libORB_SLAM3.so" CACHE FILEPATH
+    "Pinned and patched ORB-SLAM3 shared library")
+set(OVRS_PANGOLIN_PREFIX
+    "${CMAKE_CURRENT_SOURCE_DIR}/.deps/install/pangolin-v0.6" CACHE PATH
+    "Pinned Pangolin prefix used by the ORB-SLAM3 build")
+set(OVRS_GLEW_PREFIX
+    "${CMAKE_CURRENT_SOURCE_DIR}/.deps/install/glew-cmake" CACHE PATH
+    "Pinned GLEW prefix used by the Pangolin build")
+set(OVRS_PANGOLIN_LIBRARY
+    "${OVRS_PANGOLIN_PREFIX}/lib/libpangolin.so" CACHE FILEPATH
+    "Pinned Pangolin shared library used by ORB-SLAM3")
+set(OVRS_GLEW_LIBRARY
+    "${OVRS_GLEW_PREFIX}/lib/libglew.so" CACHE FILEPATH
+    "Pinned GLEW shared library used by Pangolin")
 
 find_package(Threads REQUIRED)
 
@@ -75,9 +95,62 @@ if(OVRS_ENABLE_OPENVINS)
   list(APPEND _ovrs_opencv_components
     core imgproc features2d calib3d imgcodecs highgui)
 endif()
+if(OVRS_ENABLE_ORBSLAM3)
+  if(NOT OVRS_ENABLE_HARDWARE)
+    message(FATAL_ERROR
+      "OVRS_ENABLE_ORBSLAM3 requires OVRS_ENABLE_HARDWARE for live capture")
+  endif()
+  list(APPEND _ovrs_opencv_components
+    core imgproc features2d calib3d imgcodecs highgui)
+endif()
 if(_ovrs_opencv_components)
   list(REMOVE_DUPLICATES _ovrs_opencv_components)
   find_package(OpenCV 4 REQUIRED COMPONENTS ${_ovrs_opencv_components})
+endif()
+
+if(OVRS_ENABLE_ORBSLAM3)
+  foreach(_ovrs_orb_required IN ITEMS
+      "${OVRS_ORBSLAM3_SOURCE}/include/System.h"
+      "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/Sophus/sophus/se3.hpp"
+      "${OVRS_PANGOLIN_PREFIX}/include/pangolin/pangolin.h"
+      "${OVRS_GLEW_PREFIX}/include/GL/glew.h"
+      "${OVRS_PANGOLIN_LIBRARY}"
+      "${OVRS_GLEW_LIBRARY}"
+      "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/DBoW2/lib/libDBoW2.so"
+      "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/g2o/lib/libg2o.so"
+      "${OVRS_ORBSLAM3_LIBRARY}")
+    if(NOT EXISTS "${_ovrs_orb_required}")
+      message(FATAL_ERROR
+        "Pinned ORB-SLAM3 live dependency is incomplete: "
+        "${_ovrs_orb_required}. See docs/orbslam3_live.md.")
+    endif()
+  endforeach()
+  file(SHA256
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/orbslam3-atlas-serialization-integrity.patch"
+    _ovrs_orb_patch_sha256)
+  if(NOT _ovrs_orb_patch_sha256 STREQUAL OVRS_ORBSLAM3_PATCH_SHA256)
+    message(FATAL_ERROR
+      "ORB-SLAM3 patch hash differs from the reviewed dependency pin")
+  endif()
+  execute_process(
+    COMMAND git -C "${OVRS_ORBSLAM3_SOURCE}" rev-parse HEAD
+    OUTPUT_VARIABLE _ovrs_orb_commit
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _ovrs_orb_git_status)
+  if(NOT _ovrs_orb_git_status EQUAL 0 OR
+     NOT _ovrs_orb_commit STREQUAL OVRS_ORBSLAM3_COMMIT)
+    message(FATAL_ERROR
+      "ORB-SLAM3 checkout is not at ${OVRS_ORBSLAM3_COMMIT}")
+  endif()
+  file(SHA256 "${OVRS_ORBSLAM3_LIBRARY}" _ovrs_orb_library_sha256)
+  find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+  find_package(OpenGL REQUIRED)
+  find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+  add_library(ovrs_orbslam3_backend SHARED IMPORTED)
+  set_target_properties(ovrs_orbslam3_backend PROPERTIES
+    IMPORTED_LOCATION "${OVRS_ORBSLAM3_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${OVRS_ORBSLAM3_SOURCE};${OVRS_ORBSLAM3_SOURCE}/include;${OVRS_ORBSLAM3_SOURCE}/include/CameraModels;${OVRS_ORBSLAM3_SOURCE}/Thirdparty/Sophus;${OVRS_PANGOLIN_PREFIX}/include;${OVRS_GLEW_PREFIX}/include")
 endif()
 
 add_library(ovrs_core
@@ -85,8 +158,10 @@ add_library(ovrs_core
   src/calibration_validation.cpp
   src/capture_mode.cpp
   src/config.cpp
+  src/imu_startup_gate.cpp
   src/imu_synchronizer.cpp
   src/measurement_dispatcher.cpp
+  src/orb_trajectory_gate.cpp
   src/stereo_synchronizer.cpp
   src/timestamp_normalizer.cpp
   src/tracking_health.cpp
@@ -214,6 +289,36 @@ foreach(app IN ITEMS ovrs_inspect ovrs_record ovrs_live ovrs_replay)
   ovrs_enable_project_sanitizers(${app})
 endforeach()
 
+add_executable(ovrs_orbslam3_live apps/ovrs_orbslam3_live.cpp)
+target_link_libraries(ovrs_orbslam3_live PRIVATE ovrs_core)
+if(OVRS_ENABLE_HARDWARE)
+  target_link_libraries(ovrs_orbslam3_live PRIVATE ovrs_realsense)
+endif()
+if(OVRS_ENABLE_ORBSLAM3)
+  target_include_directories(ovrs_orbslam3_live SYSTEM PRIVATE
+    ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(ovrs_orbslam3_live PRIVATE
+    ovrs_orbslam3_backend Eigen3::Eigen ${OpenCV_LIBS}
+    OpenGL::OpenGL OpenSSL::Crypto
+    "${OVRS_PANGOLIN_LIBRARY}"
+    "${OVRS_GLEW_LIBRARY}"
+    "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/DBoW2/lib/libDBoW2.so"
+    "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/g2o/lib/libg2o.so")
+  target_compile_definitions(ovrs_orbslam3_live PRIVATE
+    OVRS_HAS_ORBSLAM3=1
+    OVRS_OPENCV_VERSION="${OpenCV_VERSION}"
+    OVRS_ORBSLAM3_COMMIT_VALUE="${OVRS_ORBSLAM3_COMMIT}"
+    OVRS_ORBSLAM3_PATCH_SHA256_VALUE="${OVRS_ORBSLAM3_PATCH_SHA256}"
+    OVRS_ORBSLAM3_LIBRARY_SHA256_VALUE="${_ovrs_orb_library_sha256}"
+    OVRS_ORBSLAM3_LIBRARY_PATH_VALUE="${OVRS_ORBSLAM3_LIBRARY}")
+  set_property(TARGET ovrs_orbslam3_live APPEND PROPERTY BUILD_RPATH
+    "${OVRS_ORBSLAM3_SOURCE}/lib"
+    "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/DBoW2/lib"
+    "${OVRS_ORBSLAM3_SOURCE}/Thirdparty/g2o/lib")
+endif()
+ovrs_enable_project_warnings(ovrs_orbslam3_live)
+ovrs_enable_project_sanitizers(ovrs_orbslam3_live)
+
 if(OVRS_BUILD_TESTS)
   enable_testing()
   add_executable(ovrs_core_tests tests/core_tests.cpp)
@@ -249,6 +354,10 @@ if(OVRS_BUILD_TESTS)
       NAME ovrs_calibration_scripts_test
       COMMAND "${Python3_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_scripts_test.py")
+    add_test(
+      NAME ovrs_vislam_research_scripts_test
+      COMMAND "${Python3_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/tests/vislam_research_scripts_test.py")
   endif()
 
   find_program(OVRS_BASH_EXECUTABLE bash)
@@ -261,4 +370,5 @@ if(OVRS_BUILD_TESTS)
 endif()
 
 install(TARGETS ovrs_inspect ovrs_record ovrs_live ovrs_replay
+                ovrs_orbslam3_live
         RUNTIME DESTINATION bin)

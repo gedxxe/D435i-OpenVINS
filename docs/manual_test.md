@@ -13,12 +13,12 @@ branches are evidence/recovery paths, not alternative runtime configurations.
 
 ## Gate 1: source and build
 
-- [ ] Root `VERSION` is `0.5.2`.
+- [ ] Root `VERSION` is `0.6.0` on the research branch.
 - [ ] `git diff --check` reports no whitespace errors.
 - [ ] `./scripts/build_ubuntu.sh` completed.
 - [ ] `./scripts/preflight_ubuntu.sh --require-build` passed.
 - [ ] CTest ran named tests; it did not print `No tests were found`.
-- [ ] All four executables report v0.5.2 and one source fingerprint.
+- [ ] All four executables report v0.6.0 and one source fingerprint.
 - [ ] Build cache points to repository-local Ceres 2.1.0.
 - [ ] Build cache points to repository-local patched librealsense 2.57.3.
 - [ ] Both reviewed patch files match the SHA-256 pins in
@@ -99,6 +99,9 @@ workflow. Never rename the key without inverting the matrix.
 - [ ] Moving acceptance uses a newly recorded dataset containing the explicit
   sensitivity and scale provenance; a legacy dataset or stationary-only
   capture is insufficient.
+- [ ] When `ovrs_record --capture-mode vio --preview` is used, Space starts a
+  clean recording after preview, both IR views remain live during capture, and
+  preview frames are not counted as dataset frames.
 
 Proceed to Gates 9 and 10. Gates 5-8 describe replacement calibration and do
 not need to be repeated for every normal startup.
@@ -271,7 +274,8 @@ pass strict promotion and must not be relabelled.
 
 ## Gate 9: new VIO dataset and replay
 
-- [ ] Dataset was recorded after the current v0.5.2/librealsense 2.57.3 build.
+- [ ] Dataset was recorded by a compatible v0.5.2/v0.6.0 capture path using
+      the reviewed librealsense 2.57.3 build, and its provenance was preserved.
 - [ ] Dataset has no `INCOMPLETE` marker.
 - [ ] Replay did not use `--serial`.
 - [ ] Branch A used the exact selected candidate A config, the explicit
@@ -341,3 +345,59 @@ acceptance.
 
 Only after all applicable gates pass may the run be described as successful
 for that exact hardware, configuration, and test.
+
+## Gate 11: isolated ORB-SLAM3 return-to-home experiment
+
+- [ ] ORB remains a standalone experimental process; no pose or correction
+      is connected to OpenVINS, an EKF, GPS, or flight control.
+- [ ] The camera remained still for the startup cue; the startup IMU gate
+      passed before deliberate initialization motion began. A gravity mismatch
+      was not hidden with an ad-hoc accelerometer scale.
+- [ ] Tracking-latency mean/maximum, frame-budget misses, source/submission
+      rates, and queue-drop counters were retained for the viewer run.
+- [ ] Neither stereo nor IMU exceeded the pinned wall-clock input-stall limit;
+      capture duration and shutdown duration were recorded separately.
+- [ ] The live bundle, executable, vocabulary, backend patch, and
+      `libORB_SLAM3.so` hashes match the capture-time provenance.
+- [ ] The `ovrs-closed-loop-reference-v2` file was written before motion and
+      records measured rigid-stop tolerances, endpoint-window duration,
+      minimum samples, within-hold dispersion limits, and conservative
+      minimum path duration/excursion.
+- [ ] After the gate-open cue, the camera stayed against the start stop for
+      the complete endpoint window before leaving.
+- [ ] The camera returned against the same stop and remained there for the
+      complete endpoint window before shutdown.
+- [ ] No reset, pending reset, map change, tracking loss, over-limit frame
+      interval, queue drop, timestamp rejection, or inertial-state regression
+      occurred after canonical acceptance.
+- [ ] The independent evaluator found nonoverlapping start/end windows with
+      sufficient time coverage and samples.
+- [ ] Both endpoint windows stayed inside their predeclared position and
+      orientation dispersion limits.
+- [ ] Canonical duration and maximum estimated excursion met the predeclared
+      minimum physical-path bounds; a never-left-home trace did not pass.
+- [ ] The robust window-to-window residual, not only the first/last frame,
+      stayed inside the independently recorded placement tolerance.
+- [ ] Any continuity or return pass remains explicitly
+      `NOT_ACCURACY_VALIDATED` without independent trajectory ground truth.
+
+## Gate 12: offline ORB-SLAM3 persistent atlas
+
+- [ ] The source `.osa` and adjacent `.osa.manifest.yaml` both exist and their
+      recorded atlas hashes match.
+- [ ] Parent and revisit use the same D435i serial, camera/IMU calibration
+      hashes, source/adapted camera rates, stride, time-offset policy, backend
+      commit/patch/pin, atlas frame policy, library, and vocabulary.
+- [ ] The ELF runner resolves the exact `libORB_SLAM3.so` recorded in the
+      result manifest.
+- [ ] Atlas load and save completed, every detected merge finished, and the
+      final atlas contains exactly one nonempty map.
+- [ ] The active session reached terminal input coverage and inertial BA2 with
+      zero IMU-map reset and zero local-map tracking failure.
+- [ ] The result records `parent_atlas_reload_verified_by_this_run: true`.
+- [ ] The newly saved atlas remains
+      `TRACKING_GATE_PASS_ATLAS_RELOAD_UNVERIFIED` until a later process loads
+      it and passes this gate.
+- [ ] A repeated recording is reported only as serialization/merge-integrity
+      evidence. Relocalization, correct-place identity, false-merge rate, and
+      accuracy require a distinct revisit plus independent reference.

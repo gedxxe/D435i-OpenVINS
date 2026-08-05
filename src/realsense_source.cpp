@@ -733,7 +733,8 @@ public:
       ++statistics.callback_errors;
     } catch (const std::exception &e) {
       std::lock_guard<std::mutex> lock(mutex);
-      failure_message = e.what();
+      failure_message =
+          std::string("RealSense frame callback failed: ") + e.what();
       ++statistics.callback_errors;
       ++statistics.rejected_timestamps;
     } catch (...) {

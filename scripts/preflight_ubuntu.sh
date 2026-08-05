@@ -264,6 +264,58 @@ else
   warn "Local patched OpenVINS source is absent; build_ubuntu.sh will create it."
 fi
 
+orbslam3_pin="${repo_dir}/config/research/orbslam3_backend.yaml"
+orbslam3_source_dir="${repo_dir}/.deps/src/orb_slam3"
+orbslam3_patch=""
+orbslam3_commit="$(
+  sed -n 's/^commit: "\([^"]*\)"$/\1/p' "${orbslam3_pin}" 2>/dev/null ||
+    true
+)"
+orbslam3_patch_relative="$(
+  sed -n 's/^patch: "\([^"]*\)"$/\1/p' "${orbslam3_pin}" 2>/dev/null ||
+    true
+)"
+orbslam3_patch_sha256="$(
+  sed -n 's/^patch_sha256: "\([^"]*\)"$/\1/p' \
+    "${orbslam3_pin}" 2>/dev/null || true
+)"
+if [[ "${orbslam3_patch_relative}" != \
+      "patches/orbslam3-atlas-serialization-integrity.patch" ]]; then
+  fail "ORB-SLAM3 backend pin names an unexpected project patch."
+else
+  orbslam3_patch="${repo_dir}/${orbslam3_patch_relative}"
+  actual_orbslam3_patch_sha256="$(
+    sha256sum "${orbslam3_patch}" 2>/dev/null | awk '{print $1}' || true
+  )"
+  if [[ "${orbslam3_commit}" =~ ^[0-9a-f]{40}$ &&
+        "${orbslam3_patch_sha256}" =~ ^[0-9a-f]{64}$ &&
+        "${actual_orbslam3_patch_sha256}" == \
+          "${orbslam3_patch_sha256}" ]]; then
+    pass "ORB-SLAM3 research patch matches its backend SHA-256 pin."
+  else
+    fail "ORB-SLAM3 research commit or patch pin is missing or inconsistent."
+  fi
+fi
+if [[ -d "${orbslam3_source_dir}/.git" ]]; then
+  actual_orbslam3_commit="$(
+    git -C "${orbslam3_source_dir}" rev-parse HEAD 2>/dev/null || true
+  )"
+  if [[ "${actual_orbslam3_commit}" == "${orbslam3_commit}" ]]; then
+    pass "Local ORB-SLAM3 research source is at ${actual_orbslam3_commit}."
+  else
+    fail "Local ORB-SLAM3 research source does not match its backend pin."
+  fi
+  if [[ -r "${orbslam3_patch}" ]] &&
+     ovrs_git_tracked_content_matches_patch \
+       "${orbslam3_source_dir}" "${orbslam3_patch}"; then
+    pass "Local ORB-SLAM3 source exactly matches the reviewed atlas patch."
+  else
+    fail "Local ORB-SLAM3 source differs from the reviewed atlas patch."
+  fi
+else
+  info "Optional ORB-SLAM3 research source is not present under .deps."
+fi
+
 check_pkg_config() {
   local package="$1"
   local label="$2"
@@ -467,11 +519,16 @@ else
 fi
 
 if command -v python3 >/dev/null 2>&1; then
-  calibration_python_ok=1
+  project_python_ok=1
   for script in calibration_common.py create_aprilgrid_target.py \
                 plan_aprilgrid_target.py \
                 validate_calibration_capture.py \
                 export_calibration_capture.py \
+                export_vislam_benchmark.py \
+                prepare_orbslam3_benchmark.py \
+                run_orbslam3_benchmark.py \
+                evaluate_orbslam3_run.py \
+                evaluate_orbslam3_live_run.py \
                 validate_calibration_export_set.py \
                 validate_kalibr_outputs.py \
                 prepare_imu_calibration_yaml.py \
@@ -481,10 +538,10 @@ if command -v python3 >/dev/null 2>&1; then
     if ! PYTHONDONTWRITEBYTECODE=1 python3 -c \
          'from pathlib import Path; compile(Path(__import__("sys").argv[1]).read_text(encoding="utf-8"), __import__("sys").argv[1], "exec")' \
          "${repo_dir}/scripts/${script}"; then
-      calibration_python_ok=0
+      project_python_ok=0
     fi
   done
-  if [[ "${calibration_python_ok}" -eq 1 ]] &&
+  if [[ "${project_python_ok}" -eq 1 ]] &&
      python3 "${repo_dir}/scripts/create_aprilgrid_target.py" \
        --help >/dev/null &&
      python3 "${repo_dir}/scripts/plan_aprilgrid_target.py" \
@@ -492,6 +549,16 @@ if command -v python3 >/dev/null 2>&1; then
      python3 "${repo_dir}/scripts/validate_calibration_capture.py" \
        --help >/dev/null &&
      python3 "${repo_dir}/scripts/export_calibration_capture.py" \
+       --help >/dev/null &&
+     python3 "${repo_dir}/scripts/export_vislam_benchmark.py" \
+       --help >/dev/null &&
+     python3 "${repo_dir}/scripts/prepare_orbslam3_benchmark.py" \
+       --help >/dev/null &&
+     python3 "${repo_dir}/scripts/run_orbslam3_benchmark.py" \
+       --help >/dev/null &&
+     python3 "${repo_dir}/scripts/evaluate_orbslam3_run.py" \
+       --help >/dev/null &&
+     python3 "${repo_dir}/scripts/evaluate_orbslam3_live_run.py" \
        --help >/dev/null &&
      python3 "${repo_dir}/scripts/validate_calibration_export_set.py" \
        --help >/dev/null &&
@@ -624,7 +691,12 @@ elif [[ "${require_build}" -eq 1 ]]; then
   fail "OpenVINS CMake cache is absent; run scripts/build_ubuntu.sh."
 fi
 
-for executable in ovrs_inspect ovrs_record ovrs_live ovrs_replay; do
+runtime_executables=(ovrs_inspect ovrs_record ovrs_live ovrs_replay)
+if ovrs_cmake_cache_value_equals \
+     "${main_cache}" OVRS_ENABLE_ORBSLAM3 ON; then
+  runtime_executables+=(ovrs_orbslam3_live)
+fi
+for executable in "${runtime_executables[@]}"; do
   executable_path="${repo_dir}/build/linux-release/${executable}"
   if [[ -x "${executable_path}" ]]; then
     if "${executable_path}" --help >/dev/null; then
@@ -684,10 +756,11 @@ if [[ "${require_build}" -eq 1 ]]; then
     fail "The release build does not register both mandatory C++ tests."
     printf '%s\n' "${ctest_listing}" >&2
   elif command -v python3 >/dev/null 2>&1; then
-    if grep -Fq "ovrs_calibration_scripts_test" <<<"${ctest_listing}"; then
-      pass "Both C++ tests and the optional Python calibration test are present."
+    if grep -Fq "ovrs_calibration_scripts_test" <<<"${ctest_listing}" &&
+       grep -Fq "ovrs_vislam_research_scripts_test" <<<"${ctest_listing}"; then
+      pass "Both C++ tests and both optional Python workflow tests are present."
     else
-      fail "Python is available but the calibration script test is not registered."
+      fail "Python is available but one or more workflow tests are not registered."
       printf '%s\n' "${ctest_listing}" >&2
     fi
   else

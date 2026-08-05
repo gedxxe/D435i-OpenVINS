@@ -16,6 +16,7 @@ enum class CaptureMode {
 struct CapturePlan {
   CaptureMode mode = CaptureMode::Vio;
   bool enable_stereo = true;
+  bool supports_preview = true;
   bool enable_motion = true;
   bool write_synchronized_imu = true;
   bool requires_stationary_sensor = false;

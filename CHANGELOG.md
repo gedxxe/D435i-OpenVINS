@@ -6,6 +6,172 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Added a serial-bound live startup IMU gate after a connected D435i session
+  produced a stable approximately-2g accelerometer stream. Independent raw SDK
+  and project captures reproduced it; a non-persistent hardware reset restored
+  approximately 1g without changing calibration or adding a scale. New live
+  bundle-v4 runs require a pinned low-motion window inside the selected
+  estimator gravity/bias envelope before canonical ORB poses can be accepted.
+  Per-frame tracking latency now has independently checked mean, maximum,
+  nominal frame budget, and deadline-miss diagnostics. A pinned wall-clock
+  watchdog now fails on silent stereo or IMU input, and rate denominators
+  exclude ORB/viewer shutdown time.
+- Started the isolated v0.6.0 markerless stereo-inertial SLAM research branch
+  from the clean v0.5.2 OpenVINS baseline. The existing live estimator remains
+  unchanged while offline backend evidence is collected.
+- Added a fail-closed, dependency-light exporter from complete
+  `ovrs-euroc-like-v1` VIO recordings to a backend-neutral EuRoC stereo/IMU
+  layout. It preserves source metadata hashes, marks results as not evaluated,
+  rejects capture-integrity errors, and never presents an export as an
+  accuracy result.
+- Pinned and built the first external ORB-SLAM3 stereo-inertial backend in the
+  ignored dependency tree. Added a standard-library adapter that preserves the
+  fixed camera-to-IMU time offset, derives transform directions explicitly,
+  hashes generated inputs, and rejects incompatible recording provenance. The
+  first existing capture exercised the runner but failed its inertial-motion
+  initialization gate, so no SLAM success is claimed.
+- Added explicit camera-stride and calibrated-versus-zero time-offset A/B
+  policies to the ORB-SLAM3 adapter while retaining every IMU row. A new
+  zero-drop 150.62-second D435i sequence tracked completely in stereo-only
+  mode, but every stereo-inertial variant still reset its IMU map. The
+  zero-offset improvement was not repeatable, so neither A/B policy was
+  promoted as a runtime fix.
+- Recorded a second zero-drop D435i sequence with translation designed for the
+  upstream inertial initializer. Two identical calibrated-offset 30 Hz runs
+  each completed both inertial BA stages in one map with no reset or tracking
+  failure. One repeat applied a loop correction after rejecting two candidates,
+  but the loop event was not repeatable and no independent reference was
+  available, so no loop-closure or accuracy pass is claimed.
+- Added a fail-closed ORB-SLAM3 result evaluator and supported runner. They
+  capture the backend exit status, validate trajectory structure and terminal
+  coverage, distinguish rejected loop candidates from applied corrections,
+  hash every result input, and keep accuracy unevaluated unless an independent
+  colocated start/end reference is supplied.
+- Recorded a zero-drop, rigid-stop referenced closed loop. Two identical
+  calibrated-offset 30 Hz runs passed continuous stereo-inertial tracking and
+  returned within the recorded 2 cm and 5 degree placement tolerances. Neither
+  run detected a loop, so the result establishes repeatable endpoint
+  consistency rather than loop closure or full-trajectory accuracy.
+- Added a guarded ORB-SLAM3 persistent-atlas experiment. The adapter can stage
+  a hashed `.osa` input and generate explicit save/load settings. The evaluator
+  requires completed atlas I/O, continuous inertial tracking, an applied
+  cross-session map merge, and one final map. The first upstream save reloaded
+  with dangling graph references and segfaulted; a pinned project patch now
+  waits for graph-mutating threads before serialization, saves a self-contained
+  graph, filters transient empty maps without invalidating registry iteration,
+  and fails closed on unresolved load references. A fresh atlas plus two
+  chained offline reload generations completed with one merge, one final map,
+  3,807 active-session poses, and zero reset or tracking failure per reload.
+  Newly saved atlas manifests remain explicitly reload-unverified. The result
+  uses one repeated recording and does not yet establish false-merge rate or
+  distinct-session relocalization accuracy.
+- Closed the offline atlas provenance gap found during the v0.6.0 re-audit.
+  Atlas loading now requires the generated companion manifest and rejects a
+  camera-serial, calibration, cadence, time-offset, backend, patch, library,
+  vocabulary, or frame-policy mismatch. The evaluator permits accumulated
+  multi-session keyframes to exceed current-session frames, requires every
+  detected merge to finish, verifies exact ELF `libORB_SLAM3.so` resolution,
+  and records which parent revision a passing run reload-verified. Final-code
+  replay loaded revision 4, rehashed every immutable launch input after exit,
+  and completed one merge and one-map save with 303 keyframes, zero
+  reset/failure, and 3,807 terminally covered poses. Revision 5 remains
+  reload-unverified; the repeated input still provides no
+  distinct-revisit, false-merge, relocalization-accuracy, or navigation pass.
+- Added `ovrs_orbslam3_live`, an isolated experimental pure ORB-SLAM3
+  stereo-inertial desktop path using the project-owned D435i capture,
+  synchronization, bounded queues, serial/calibration gates, and immutable
+  backend provenance. It retains OpenVINS as the separate baseline, feeds the
+  offline-validated 30 Hz camera cadence with every IMU sample, exposes the
+  native ORB map viewer, and fails unless capture integrity and ORB inertial
+  initialization both succeed. The pinned backend patch also initializes the
+  local-mapper keyframe lifecycle before the first image and exposes a
+  thread-safe atlas IMU-status query, preventing the observed first-frame
+  `isFinished()` null-lifecycle crash. Dispatcher diagnostics now distinguish
+  normal pre-IMU and shutdown boundary frames from in-stream coverage loss.
+  The live output is now fail-closed across ORB active-map resets: visually
+  tracked pre-initialization poses are diagnostic-only, the canonical camera
+  trajectory is published only after a configurable continuous inertial
+  stability window with zero resets, and any later reset or inertial-state
+  regression permanently rejects the run. The exact upstream acceleration
+  initialization delta and pinned threshold are recorded per frame; the
+  threshold was not relaxed and fast initialization remains disabled.
+  A connected motion audit then exposed a 0.566 m streaming pose jump during
+  the second inertial bundle adjustment even though the reset count stayed
+  zero. Canonical acceptance now waits for inertial BA2 completion plus the
+  stability window, records the active-map correction index, and rejects a
+  later loop/global-BA map change rather than presenting map-frame correction
+  as continuous local odometry.
+  A fresh connected D435i run subsequently completed both inertial BA stages
+  with zero resets, drops, lost frames, or map corrections. Its diagnostic
+  stream contained a 166.736 m BA2 correction, while the accepted post-BA2
+  stream contained 1,345 monotonic poses and a 0.026475 m maximum adjacent
+  translation. This is continuity evidence only; no external ground truth was
+  available for metric-accuracy claims.
+- Added an independent live-result evaluator that recomputes the ORB
+  continuity gate from strict tracking/IMU CSVs and the canonical trajectory,
+  binds the device serial and bundle/settings/backend provenance, and records
+  coherent reset runs as explicit gate failures. It supports an optional
+  caller-justified discontinuity envelope and a physically recorded
+  colocated-start/end reference without feeding either into ORB-SLAM3,
+  OpenVINS, or an EKF. The live app now announces the first post-BA2 stable
+  canonical pose so a return-to-start experiment can begin in the correct map
+  frame.
+- Closed the remaining live executable provenance gap. Each new run now
+  captures a launch manifest before ORB worker construction and hashes the
+  running executable, actual `libORB_SLAM3.so`, vocabulary, generated settings,
+  bundle manifest, and compiled source fingerprint. The application rejects a
+  backend library changed since build, while the evaluator verifies every
+  capture-time binding and keeps older runs explicitly marked as legacy
+  unattested evidence.
+- Hardened dependency and worker shutdown failure paths found by the live
+  re-audit. The pinned librealsense patch now turns failed libusb
+  initialization or enumeration into a diagnostic error instead of calling
+  device enumeration with a null context. The live runner resolves that
+  hardware context before starting ORB workers and owns ORB shutdown with an
+  exception-safe guard. The ORB patch now serializes concurrent viewer/app
+  shutdown, joins the viewer from its external owner, and initializes worker
+  pointers before use. Its viewer thread also unwinds instead of waiting when
+  the viewer Stop action overlaps an externally owned shutdown, preventing a
+  circular wait. Fresh build, reload, and second-reload atlas runs bind the
+  complete patch and resulting shared library, complete two consecutive
+  cross-session merge gates with one final map and no reset, and leave only
+  the newest saved atlas revision explicitly pending a future reload. Generic
+  exceptions escaping a RealSense frame callback now retain their callback
+  origin in the failure diagnostic, and dispatcher failures distinguish an
+  ORB `TrackStereo` exception from a capture-source failure.
+- Fixed the intermittent zero-feature first-frame failure at its ORB-SLAM3
+  origin. Every image-frame constructor now establishes its IMU mutex before
+  feature extraction can return early; a debugger traced the former
+  `Operation not permitted` exception through `Frame::setIntegrated()`.
+  Ten consecutive connected stationary process starts then streamed without
+  that exception or a segmentation fault. The live continuity contract also
+  now requires valid-pose tracking throughout the post-BA2 stability window,
+  permanently rejects tracking loss after acceptance, and rejects a
+  post-acceptance frame gap above a rate-derived pinned limit. The independent
+  evaluator recomputes both the timer and interval history from raw CSV rows.
+  A current-schema stationary hardware smoke recorded 621 ORB frames with a
+  33.615 ms maximum interval, zero loss/gap/reset/drop, and the expected
+  no-motion inertial rejection. A fresh atlas build plus two reload processes
+  then completed both merge gates with one final map and zero reset using the
+  corrected backend library.
+- Replaced live return-to-home evaluation based on one first/last pose pair
+  with a fail-closed v2 physical-reference contract. The operator predeclares
+  start/end hold duration, minimum samples, and position/orientation
+  dispersion limits. The evaluator verifies nonoverlapping time-covered
+  windows, computes median-position and quaternion-sign-safe representative
+  poses, rejects noisy or insufficient holds, and reports the robust endpoint
+  residual while retaining raw first/last residuals as diagnostics.
+  Continuity and physical-reference failures now have separate manifest fields
+  and a dedicated continuity-pass/reference-fail terminal state. Predeclared
+  minimum path duration and excursion prevent a stationary trace from being
+  accepted as a completed return.
+- Extended the existing bounded, main-thread stereo preview to normal `vio`
+  recording. Preview still uses a disposable pipeline before Space starts a
+  clean dataset, and closing the window during capture fails closed with
+  `INCOMPLETE`.
+- Defined the backend comparison, map/odometry frame separation, markerless
+  operating policy, ground-truth metrics, false-loop gate, and Raspberry Pi 5
+  resource gates for the new research phase.
 - Split calibration and estimator-bundle validation out of the generic
   application-support module. `app_support` now contains only process, file,
   CLI, and version helpers; the public calibration contract has its own header
@@ -19,7 +185,8 @@ current tree; they must not be read as claims that historical Git tags exist.
 - Removed an unreferenced pre-v0.4 local-bundle migration script. Current
   calibration migration and promotion paths remain documented and tested.
 - Fixed the pinned librealsense 2.57.3 RSUSB gyro-sensitivity feature-report
-  encoding and made the patched repository-local build mandatory. Patch
+  encoding, added fail-closed libusb context construction, and made the
+  patched repository-local build mandatory. Patch
   SHA-256 values now live beside dependency commit pins, are checked before
   build or preflight, and are exercised by CTest through the selected-runtime
   verifier. The active stream is semantically required to retain sensitivity

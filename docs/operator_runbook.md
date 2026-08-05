@@ -16,12 +16,14 @@ conditions.
 </p>
 
 > [!IMPORTANT]
-> This is odometry, not mapping or loop closure. Drift is bounded by sensor
-> quality, calibration, excitation, feature geometry, and estimator
-> consistency. The selected camera records an explicit gyro-scale policy.
-> The patched RSUSB host path now preserves the requested gyro sensitivity and
-> uses the SDK value directly at scale `1.0`; this removes the demonstrated
-> angular-scale mismatch but cannot eliminate standalone-VIO drift.
+> The live OpenVINS path is odometry, not mapping or loop closure. The v0.6.0
+> branch adds only offline markerless-SLAM research until a backend passes its
+> documented gates. Drift in the existing runtime is bounded by sensor quality,
+> calibration, excitation, feature geometry, and estimator consistency. The
+> selected camera records an explicit gyro-scale policy. The patched RSUSB host
+> path now preserves the requested gyro sensitivity and uses the SDK value
+> directly at scale `1.0`; this removes the demonstrated angular-scale mismatch
+> but cannot eliminate standalone-VIO drift.
 
 ## At a glance
 
@@ -35,7 +37,8 @@ conditions.
 | Concurrency | bounded queues, deterministic ownership, no detached threads |
 | Output | pose, velocity, biases, covariance, visual-support status, trajectory log, interactive global XYZ viewer |
 | Calibration | serial-specific camera, stereo, camera-IMU, time offset, IMU noise/intrinsics |
-| Explicitly excluded | RGB/depth processing, ROS/ROS2, mapping, loop closure, GPS, navigation, flight control |
+| Live runtime exclusions | RGB/depth processing, ROS/ROS2, mapping, loop closure, GPS, navigation, flight control |
+| Offline research | Markerless SLAM backend export and comparison; see `docs/vislam_research_plan.md` |
 
 The runtime is standalone, while the supported offline calibration procedure
 uses pinned Allan/Kalibr tools in an isolated Ubuntu 20.04/ROS1 container.
@@ -506,7 +509,7 @@ ctest --test-dir build/linux-release \
 )
 ```
 
-Success requires project version 0.5.2, OpenVINS v2.7 with ROS disabled,
+Success on this branch requires project version 0.6.0, OpenVINS v2.7 with ROS disabled,
 repository-local Ceres 2.1.0, patched repository-local librealsense 2.57.3,
 hardware executables resolving that local library, and actual CTest cases.
 `No tests were found` is a failure.
@@ -1516,7 +1519,7 @@ Docker starts.
 ### 10B. Set paths and create bags
 
 In the Docker branch, use `/work/calibration/...` paths. In the VM/machine
-branch, first check out this exact v0.5.2 source/pins and copy the three export
+branch, first check out this exact source and dependency pins and copy the three export
 directories into it. Variables from the runtime terminal do not cross into
 either environment, so enter actual paths:
 
@@ -2046,6 +2049,13 @@ milestone, use a marked start pose and this 120-second sequence: 0-20 seconds
 still, 20-50 seconds smooth outbound translation and rotation, 50-65 seconds
 smooth return, and 65-120 seconds still:
 
+`--preview` first opens a separate preview-only pipeline. Verify that both IR
+views are sharp and well exposed, then press Space. The preview pipeline stops
+before the clean recording pipeline starts; preview frames and counters never
+enter the dataset. During recording the same main-thread window displays the
+latest owned stereo pair. Closing it or pressing q/Escape aborts the recording
+and keeps `INCOMPLETE`.
+
 ```bash
 : "${D435I_SERIAL:?Select the current camera serial first}"
 : "${STREAM_CONFIG:?Select the current stream configuration first}"
@@ -2054,6 +2064,7 @@ VIO_DATASET="datasets/vio_selected_${VIO_RUN_ID}"
 
 if ./build/linux-release/ovrs_record \
      --capture-mode vio \
+     --preview \
      --serial "${D435I_SERIAL}" \
      --duration 120 \
      --stream-config "${STREAM_CONFIG}" \
@@ -2230,7 +2241,8 @@ plot instead:
 - `docs/calibration.md`: transform, timing, Allan, and Kalibr contracts.
 - `docs/manual_test.md`: acceptance checklist with stop/go decisions.
 - `docs/dataset.md`: VIO and calibration capture formats.
+- `docs/vislam_research_plan.md`: isolated markerless SLAM research gates.
 - `docs/timestamps.md`: clock domains, interpolation, and ordering.
 - `docs/dependencies.md`: pinned build and optional Python dependencies.
 - `AUDIT_REPORT.md`: verified results and remaining environment/hardware limits.
-- `CHANGELOG.md`: version progression from v0 through v0.5.2.
+- `CHANGELOG.md`: version progression and the current v0.6.0 research work.

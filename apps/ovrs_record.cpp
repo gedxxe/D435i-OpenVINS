@@ -48,8 +48,8 @@ void help() {
                "MODE is vio (default), imu-allan, stereo-calibration, or\n"
                "imu-camera-calibration. Calibration captures are deliberately\n"
                "not replay-compatible and never become KALIBR_VERIFIED.\n"
-               "--preview is valid only for stereo-calibration and\n"
-               "imu-camera-calibration captures.\n";
+               "--preview is valid for capture modes with stereo images:\n"
+               "vio, stereo-calibration, and imu-camera-calibration.\n";
 }
 } // namespace
 
@@ -132,9 +132,9 @@ int main(int argc, char **argv) {
                  "or imu-camera-calibration\n";
     return 2;
   }
-  if (preview_requested && !plan->requires_calibration_target) {
-    std::cerr << "--preview is valid only with stereo-calibration or "
-                 "imu-camera-calibration\n";
+  if (preview_requested && !plan->supports_preview) {
+    std::cerr << "--preview requires a stereo capture mode: vio, "
+                 "stereo-calibration, or imu-camera-calibration\n";
     return 2;
   }
   const std::filesystem::path root(output);
@@ -192,10 +192,15 @@ int main(int argc, char **argv) {
       }
       config.serial = ovrs::simple_yaml_scalar(
           preview_source.device_report_yaml(), "serial");
+      std::cout << "Preview opened for serial " << config.serial << ".\n";
+      if (plan->requires_calibration_target) {
+        std::cout << "Verify the whole AprilGrid is sharp and visible in IR1 "
+                     "and IR2; ";
+      } else {
+        std::cout << "Verify IR1 and IR2 are live, sharp, and well exposed; ";
+      }
       std::cout
-          << "Preview opened for serial " << config.serial << ".\n"
-          << "Verify the whole AprilGrid is sharp and visible in IR1 and IR2; "
-             "press Space to start a clean capture, or q/Esc to cancel.\n";
+          << "press Space to start a clean capture, or q/Esc to cancel.\n";
       bool have_frame = false;
       bool start_capture = false;
       while (!ovrs::stop_requested() && preview_source.failure().empty() &&
@@ -240,8 +245,7 @@ int main(int argc, char **argv) {
             "selected RealSense device disconnected during preview");
       }
       if (!start_capture) {
-        std::cerr << "Calibration preview cancelled; no dataset was "
-                     "initialized.\n";
+        std::cerr << "Capture preview cancelled; no dataset was initialized.\n";
         return ovrs::stop_requested() ? 130 : 2;
       }
     }
@@ -433,8 +437,11 @@ int main(int argc, char **argv) {
         std::ostringstream status;
         status << "RECORDING " << std::fixed << std::setprecision(1)
                << elapsed << " / " << duration << " s";
-        if (!preview->show(*latest_preview_frame, status.str(),
-                           "Keep target visible and sharp   q/Esc: abort",
+        const auto instruction =
+            plan->requires_calibration_target
+                ? "Keep target visible and sharp   q/Esc: abort"
+                : "Keep both IR views sharp   q/Esc: abort";
+        if (!preview->show(*latest_preview_frame, status.str(), instruction,
                            &error)) {
           throw std::runtime_error(error);
         }

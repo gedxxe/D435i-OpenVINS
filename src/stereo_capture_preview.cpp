@@ -9,7 +9,7 @@
 namespace ovrs {
 namespace {
 
-constexpr const char *window_name = "OVRS calibration capture preview";
+constexpr const char *window_name = "OVRS stereo capture preview";
 
 cv::Mat image_view(const ImageFrame &frame) {
   const std::size_t required =
@@ -37,7 +37,7 @@ bool StereoCapturePreview::open(std::string *error) {
     return true;
   } catch (const cv::Exception &exception) {
     if (error) {
-      *error = std::string("cannot open calibration preview: ") +
+      *error = std::string("cannot open stereo preview: ") +
                exception.what() +
                ". Use a graphical desktop session or omit --preview.";
     }
@@ -52,7 +52,7 @@ bool StereoCapturePreview::show(const StereoFrame &frame,
                                 std::string *error) {
   if (!open_) {
     if (error) {
-      *error = "calibration preview is not open";
+      *error = "stereo preview is not open";
     }
     return false;
   }
@@ -78,7 +78,7 @@ bool StereoCapturePreview::show(const StereoFrame &frame,
     return true;
   } catch (const cv::Exception &exception) {
     if (error) {
-      *error = std::string("calibration preview failed: ") + exception.what();
+      *error = std::string("stereo preview failed: ") + exception.what();
     }
     return false;
   } catch (const std::exception &exception) {
@@ -93,7 +93,7 @@ CapturePreviewAction StereoCapturePreview::poll(bool allow_start,
                                                 std::string *error) {
   if (!open_) {
     if (error) {
-      *error = "calibration preview is not open";
+      *error = "stereo preview is not open";
     }
     return CapturePreviewAction::abort;
   }
@@ -111,7 +111,7 @@ CapturePreviewAction StereoCapturePreview::poll(bool allow_start,
                           : CapturePreviewAction::none;
   } catch (const cv::Exception &exception) {
     if (error) {
-      *error = std::string("calibration preview failed: ") + exception.what();
+      *error = std::string("stereo preview failed: ") + exception.what();
     }
     return CapturePreviewAction::abort;
   }

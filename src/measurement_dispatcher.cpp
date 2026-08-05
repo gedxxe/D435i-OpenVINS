@@ -118,7 +118,12 @@ bool MeasurementDispatcher::dispatch_ready_locked(
     lock.lock();
     ++stats_.dispatched_imu;
   }
-  if (!has_imu_at_or_before || !last_dispatched_timestamp_ ||
+  if (!has_imu_at_or_before) {
+    ++stats_.stereo_before_imu_start;
+    stereo_.pop_front();
+    return true;
+  }
+  if (!last_dispatched_timestamp_ ||
       *last_dispatched_timestamp_ < image_time) {
     ++stats_.stereo_without_imu_coverage;
     stereo_.pop_front();
@@ -156,7 +161,7 @@ void MeasurementDispatcher::run() {
           lock.lock();
           ++stats_.dispatched_imu;
         }
-        stats_.stereo_without_imu_coverage += stereo_.size();
+        stats_.stereo_discarded_on_shutdown += stereo_.size();
         stereo_.clear();
         running_ = false;
         return;

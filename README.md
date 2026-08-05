@@ -3,7 +3,7 @@
 <p align="center">
   <a href="#project-status"><img alt="Project status: research prototype" src="https://img.shields.io/badge/status-research%20prototype-d99b2b?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GNU GPL version 3" src="https://img.shields.io/badge/license-GPLv3-2f7d32?style=flat-square"></a>
-  <a href="CHANGELOG.md"><img alt="Release: version 0.5.2" src="https://img.shields.io/badge/release-v0.5.2-3367a8?style=flat-square"></a>
+  <a href="CHANGELOG.md"><img alt="Development version 0.6.0" src="https://img.shields.io/badge/version-v0.6.0%20research-3367a8?style=flat-square"></a>
   <a href="https://isocpp.org/"><img alt="Language: C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599c?style=flat-square&amp;logo=cplusplus&amp;logoColor=white"></a>
   <a href="https://cmake.org/"><img alt="Build system: CMake" src="https://img.shields.io/badge/build-CMake-064f8c?style=flat-square&amp;logo=cmake&amp;logoColor=white"></a>
   <a href="https://ubuntu.com/"><img alt="Platform: Ubuntu" src="https://img.shields.io/badge/platform-Ubuntu-e95420?style=flat-square&amp;logo=ubuntu&amp;logoColor=white"></a>
@@ -13,7 +13,7 @@
   <a href="https://github.com/realsenseai/librealsense"><img alt="Camera: RealSense D435i" src="https://img.shields.io/badge/camera-RealSense%20D435i-0071c5?style=flat-square&amp;logo=intel&amp;logoColor=white"></a>
   <a href="https://docs.openvins.com/"><img alt="Estimator: OpenVINS 2.7" src="https://img.shields.io/badge/estimator-OpenVINS%202.7-5849be?style=flat-square"></a>
   <a href="https://opencv.org/"><img alt="Computer vision: OpenCV" src="https://img.shields.io/badge/vision-OpenCV-5c3ee8?style=flat-square&amp;logo=opencv&amp;logoColor=white"></a>
-  <a href="docs/dependencies.md"><img alt="Tests: 4 of 4 passing" src="https://img.shields.io/badge/tests-4%2F4%20passing-2f8f46?style=flat-square"></a>
+  <a href="docs/dependencies.md"><img alt="Tests: 5 of 5 passing" src="https://img.shields.io/badge/tests-5%2F5%20passing-2f8f46?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -29,17 +29,19 @@ It includes tools for live viewing, recording a dataset, replaying a dataset,
 checking a camera, and reviewing the saved results.
 
 > [!IMPORTANT]
-> This is an odometry project, not a mapping system. It does not use loop
-> closure, so position error can build up over time. A zero-velocity update can
-> stop false motion when the camera is still, but it cannot move an already
-> drifted position back to the correct place.
+> The reviewed v0.5.2 runtime remains odometry only. The v0.6.0 research branch
+> adds offline, markerless SLAM evaluation without changing that live estimator
+> path. It also provides a separate experimental pure ORB-SLAM3 desktop live
+> executable; this is not OpenVINS/ORB fusion, and mapping, loop closure, and
+> relocalization are not yet accepted production features.
 
 ## Project status
 
 | Item | Current setup |
 | --- | --- |
-| Release | v0.5.2 |
-| Status | Research prototype |
+| Version | v0.6.0 research branch |
+| Stable baseline | v0.5.2 OpenVINS odometry |
+| Status | Offline SLAM benchmark foundation |
 | Host | Ubuntu 22.04 or 24.04 |
 | Camera | Intel RealSense D435i |
 | Live stereo | 848×480 Y8 at 90 Hz |
@@ -62,6 +64,11 @@ keeps the runtime gyro scale at `1.0`. Marked-position tests still showed some
 endpoint drift, especially in poor light. See
 [the selected runtime notes](docs/selected_runtime.md) for the measurements
 and the limits of the current 90 Hz setup.
+
+The next phase compares the same recordings with OpenVINS, ORB-SLAM3, and
+OKVIS2 before choosing a mapping backend. The plan, metrics, frame separation,
+and acceptance gates are in the
+[markerless VSLAM research plan](docs/vislam_research_plan.md).
 
 ## How it works
 
@@ -196,10 +203,46 @@ physical movement.
 | `ovrs_record` | Record synchronized stereo and IMU data |
 | `ovrs_replay` | Run a saved dataset through the estimator |
 | `ovrs_live` | Run the camera, estimator, logger, and optional viewer |
+| `ovrs_orbslam3_live` | Run the separate experimental pure ORB-SLAM3 stereo-inertial viewer |
+| `run_orbslam3_live.sh` | Safely prepare, launch, retain, and independently evaluate one live ORB-SLAM3 attempt |
+| `export_vislam_benchmark.py` | Export a validated recording for offline SLAM comparison |
+| `prepare_orbslam3_benchmark.py` | Apply the ORB-SLAM3 time, frame, calibration, and optional atlas adapter |
+| `run_orbslam3_benchmark.py` | Run the pinned backend, enforce tracking gates, and record provisional atlas provenance |
+| `evaluate_orbslam3_run.py` | Write a hashed tracking and loop-result manifest |
+| `evaluate_orbslam3_live_run.py` | Independently recompute the pure ORB live continuity and optional return-to-start gates |
 
 Each completed run stores configuration copies and CSV files under its output
 directory. The files include raw device timestamps so timing problems can be
 checked later.
+
+The pinned ORB-SLAM3 build and current controlled results are documented in
+the [offline ORB-SLAM3 baseline](docs/orbslam3_offline.md). Two identical runs
+now initialize and track one sequence without an IMU-map reset. Loop correction
+has not yet passed the repeatability or independent-reference gates.
+The same offline guide documents the guarded atlas save/load and cross-session
+map-merge protocol. A patched atlas now survives reload and completes a merge
+on offline playback of a recorded D435i sequence. Loading now requires the
+companion atlas manifest and rejects a serial, calibration, cadence, backend,
+library, or vocabulary mismatch before promotion. A distinct revisit and an
+independent false-merge/pose reference are still required.
+The first isolated desktop live integration is documented in
+[the ORB-SLAM3 live guide](docs/orbslam3_live.md). It preserves `ovrs_live` as
+the OpenVINS baseline and does not claim hybrid fusion. The canonical ORB
+trajectory is fail-closed: pre-initialization visual tracking is diagnostic,
+acceptance starts only after inertial BA2 and continuously valid tracking are
+stable, and an active-map reset, post-acceptance tracking loss or frame gap,
+inertial-state regression, or later global map correction prevents publication
+of a continuous accepted trajectory. The maximum frame interval is derived
+from the pinned nominal ORB rate rather than hidden in the executable. A
+separate evaluator cross-checks the raw tracking/IMU logs, canonical
+trajectory, hardware serial, bundle, backend patch, and shared-library
+provenance. Its optional rigid-stop return reference is evaluation-only and is
+never consumed by ORB-SLAM3, OpenVINS, or an EKF. Live return evaluation uses
+predeclared multi-sample start/end hold windows and rejects insufficient or
+dispersed endpoint evidence rather than trusting one first/last pose pair.
+New runs also bind the running executable, vocabulary, settings, bundle, and
+actual backend library at process start; older evidence remains explicitly
+labelled as lacking capture-time executable attestation.
 
 ## Repository layout
 
@@ -219,6 +262,7 @@ third_party/open_vins pinned OpenVINS submodule
 - [Operator and calibration runbook](docs/operator_runbook.md)
 - [Manual test checklist](docs/manual_test.md)
 - [Selected runtime and test results](docs/selected_runtime.md)
+- [Markerless VSLAM research plan](docs/vislam_research_plan.md)
 - [Architecture](docs/architecture.md)
 - [Mathematical background](docs/mathematical_foundation.md)
 - [Calibration guide](docs/calibration.md)
@@ -237,9 +281,10 @@ third_party/open_vins pinned OpenVINS submodule
 - Do not report a hardware test as passed unless a D435i was connected.
 - Keep the OpenVINS submodule pinned and rebuild it after changing its patch.
 
-This repository does not include ROS, ROS2, MAVLink, ArduPilot, Pixhawk, GPS,
-mapping, loop closure, navigation, depth processing, RGB processing,
-simulation, or flight control.
+This branch permits offline markerless mapping, loop-closure, and
+relocalization research. It does not include ROS, ROS2, MAVLink, ArduPilot,
+Pixhawk, GPS, navigation, depth processing, RGB processing, simulation, or
+flight control. It does not send poses to a flight controller.
 
 ## A small way to help
 

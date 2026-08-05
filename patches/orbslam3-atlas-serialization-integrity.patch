@@ -1,0 +1,918 @@
+diff --git a/include/System.h b/include/System.h
+index 872c86e..ac40675 100644
+--- a/include/System.h
++++ b/include/System.h
+@@ -22,6 +22,8 @@
+ 
+ 
+ #include <unistd.h>
++#include <condition_variable>
++#include <cstdint>
+ #include<stdio.h>
+ #include<stdlib.h>
+ #include<string>
+@@ -176,6 +178,12 @@ public:
+     int GetTrackingState();
+     std::vector<MapPoint*> GetTrackedMapPoints();
+     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
++    bool IsImuInitialized();
++    bool IsInertialBA2Finished();
++    bool GetImuInitAccelerationDiagnostic(float &delta, float &threshold);
++    std::uint64_t GetActiveMapResetCount();
++    std::uint64_t GetActiveMapChangeIndex();
++    bool IsResetPending();
+ 
+     // For debugging
+     double GetTimeFromIMUInit();
+@@ -232,9 +240,9 @@ private:
+ 
+     // System threads: Local Mapping, Loop Closing, Viewer.
+     // The Tracking thread "lives" in the main execution thread that creates the System object.
+-    std::thread* mptLocalMapping;
+-    std::thread* mptLoopClosing;
+-    std::thread* mptViewer;
++    std::thread* mptLocalMapping = nullptr;
++    std::thread* mptLoopClosing = nullptr;
++    std::thread* mptViewer = nullptr;
+ 
+     // Reset flag
+     std::mutex mMutexReset;
+@@ -248,11 +256,20 @@ private:
+ 
+     // Shutdown flag
+     bool mbShutDown;
++    bool mbShutdownInProgress = false;
++    bool mbShutdownCompleted = false;
++    std::thread::id mShutdownOwner;
++    std::mutex mMutexShutdown;
++    std::condition_variable mShutdownCondition;
+ 
+     // Tracking state
+     int mTrackingState;
+     std::vector<MapPoint*> mTrackedMapPoints;
+     std::vector<cv::KeyPoint> mTrackedKeyPointsUn;
++    float mImuInitAccelerationDelta = 0.0f;
++    float mImuInitAccelerationThreshold = 0.0f;
++    bool mImuInitAccelerationDeltaAvailable = false;
++    std::uint64_t mActiveMapResetCount = 0;
+     std::mutex mMutexState;
+ 
+     //
+diff --git a/include/Tracking.h b/include/Tracking.h
+index 863c98e..d74b6ef 100644
+--- a/include/Tracking.h
++++ b/include/Tracking.h
+@@ -101,6 +101,7 @@ public:
+     void NewDataset();
+     int GetNumberDataset();
+     int GetMatchesInliers();
++    bool GetImuInitAccelerationDiagnostic(float &delta, float &threshold);
+ 
+     //DEBUG
+     void SaveSubTrajectory(string strNameFile_frames, string strNameFile_kf, string strFolder="");
+@@ -170,6 +171,9 @@ public:
+     double t0vis; // time-stamp of first inserted keyframe
+     double t0IMU; // time-stamp of IMU initialization
+     bool mFastInit = false;
++    float mImuInitAccelerationThreshold = 0.5f;
++    float mLastImuInitAccelerationDelta = 0.0f;
++    bool mLastImuInitAccelerationDeltaAvailable = false;
+ 
+ 
+     vector<MapPoint*> GetLocalMapMPS();
+diff --git a/src/Atlas.cc b/src/Atlas.cc
+index 7bdea06..a812b30 100644
+--- a/src/Atlas.cc
++++ b/src/Atlas.cc
+@@ -22,6 +22,7 @@
+ #include "GeometricCamera.h"
+ #include "Pinhole.h"
+ #include "KannalaBrandt8.h"
++#include<stdexcept>
+ 
+ namespace ORB_SLAM3
+ {
+@@ -313,20 +314,26 @@ void Atlas::PreSave()
+             return elem1->GetId() < elem2->GetId();
+         }
+     };
+-    std::copy(mspMaps.begin(), mspMaps.end(), std::back_inserter(mvpBackupMaps));
+-    sort(mvpBackupMaps.begin(), mvpBackupMaps.end(), compFunctor());
+-
+-    std::set<GeometricCamera*> spCams(mvpCameras.begin(), mvpCameras.end());
+-    for(Map* pMi : mvpBackupMaps)
++    mvpBackupMaps.clear();
++    vector<Map*> vpEmptyMaps;
++    for(Map* pMi : mspMaps)
+     {
+         if(!pMi || pMi->IsBad())
+             continue;
+-
+-        if(pMi->GetAllKeyFrames().size() == 0) {
+-            // Empty map, erase before of save it.
+-            SetMapBad(pMi);
++        if(pMi->GetAllKeyFrames().empty())
++        {
++            vpEmptyMaps.push_back(pMi);
+             continue;
+         }
++        mvpBackupMaps.push_back(pMi);
++    }
++    for(Map* pMi : vpEmptyMaps)
++        SetMapBad(pMi);
++    sort(mvpBackupMaps.begin(), mvpBackupMaps.end(), compFunctor());
++
++    std::set<GeometricCamera*> spCams(mvpCameras.begin(), mvpCameras.end());
++    for(Map* pMi : mvpBackupMaps)
++    {
+         pMi->PreSave(spCams);
+     }
+     RemoveBadMaps();
+@@ -337,6 +344,8 @@ void Atlas::PostLoad()
+     map<unsigned int,GeometricCamera*> mpCams;
+     for(GeometricCamera* pCam : mvpCameras)
+     {
++        if(!pCam)
++            throw std::runtime_error("Atlas has a null camera");
+         mpCams[pCam->GetId()] = pCam;
+     }
+ 
+@@ -344,6 +353,8 @@ void Atlas::PostLoad()
+     unsigned long int numKF = 0, numMP = 0;
+     for(Map* pMi : mvpBackupMaps)
+     {
++        if(!pMi)
++            throw std::runtime_error("Atlas has a null map");
+         mspMaps.insert(pMi);
+         pMi->PostLoad(mpKeyFrameDB, mpORBVocabulary, mpCams);
+         numKF += pMi->GetAllKeyFrames().size();
+diff --git a/src/Frame.cc b/src/Frame.cc
+index a04c312..644f306 100644
+--- a/src/Frame.cc
++++ b/src/Frame.cc
+@@ -44,6 +44,7 @@ cv::BFMatcher Frame::BFmatcher = cv::BFMatcher(cv::NORM_HAMMING);
+ 
+ Frame::Frame(): mpcpi(NULL), mpImuPreintegrated(NULL), mpPrevFrame(NULL), mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false), mbHasPose(false), mbHasVelocity(false)
+ {
++    mpMutexImu = new std::mutex();
+ #ifdef REGISTER_TIMES
+     mTimeStereoMatch = 0;
+     mTimeORB_Ext = 0;
+@@ -103,6 +104,11 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
+      mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
+      mpCamera(pCamera) ,mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+ {
++    // Tracking may call setIntegrated() even when ORB extraction produces no
++    // keypoints and this constructor returns early. Establish the mutex
++    // invariant before any such return.
++    mpMutexImu = new std::mutex();
++
+     // Frame ID
+     mnId=nNextId++;
+ 
+@@ -183,8 +189,6 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
+-
+     //Set no stereo fisheye information
+     Nleft = -1;
+     Nright = -1;
+@@ -203,6 +207,8 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeSt
+      mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF), mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
+      mpCamera(pCamera),mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+ {
++    mpMutexImu = new std::mutex();
++
+     // Frame ID
+     mnId=nNextId++;
+ 
+@@ -271,8 +277,6 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeSt
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
+-
+     //Set no stereo fisheye information
+     Nleft = -1;
+     Nright = -1;
+@@ -292,6 +296,8 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
+      mImuCalib(ImuCalib), mpImuPreintegrated(NULL),mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false), mpCamera(pCamera),
+      mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+ {
++    mpMutexImu = new std::mutex();
++
+     // Frame ID
+     mnId=nNextId++;
+ 
+@@ -378,7 +384,6 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
+ }
+ 
+ 
+@@ -1037,6 +1042,8 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
+          mbHasPose(false), mbHasVelocity(false)
+ 
+ {
++    mpMutexImu = new std::mutex();
++
+     imgLeft = imLeft.clone();
+     imgRight = imRight.clone();
+ 
+@@ -1117,8 +1124,6 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
+ 
+     AssignFeaturesToGrid();
+ 
+-    mpMutexImu = new std::mutex();
+-
+     UndistortKeyPoints();
+ 
+ }
+diff --git a/src/KeyFrame.cc b/src/KeyFrame.cc
+index 293ab48..9d87d42 100644
+--- a/src/KeyFrame.cc
++++ b/src/KeyFrame.cc
+@@ -20,6 +20,7 @@
+ #include "Converter.h"
+ #include "ImuTypes.h"
+ #include<mutex>
++#include<stdexcept>
+ 
+ namespace ORB_SLAM3
+ {
+@@ -929,12 +930,20 @@ void KeyFrame::PostLoad(map<long unsigned int, KeyFrame*>& mpKFid, map<long unsi
+ 
+     // Reference reconstruction
+     // Each MapPoint sight from this KeyFrame
++    if(mvBackupMapPointsId.size() != static_cast<size_t>(N))
++        throw std::runtime_error("Atlas KeyFrame has an invalid MapPoint vector");
+     mvpMapPoints.clear();
+     mvpMapPoints.resize(N);
+     for(int i=0; i<N; ++i)
+     {
+         if(mvBackupMapPointsId[i] != -1)
+-            mvpMapPoints[i] = mpMPid[mvBackupMapPointsId[i]];
++        {
++            map<long unsigned int, MapPoint*>::const_iterator mapPointIt =
++                mpMPid.find(mvBackupMapPointsId[i]);
++            if(mapPointIt == mpMPid.end() || !mapPointIt->second)
++                throw std::runtime_error("Atlas has an invalid MapPoint reference");
++            mvpMapPoints[i] = mapPointIt->second;
++        }
+         else
+             mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
+     }
+@@ -944,57 +953,93 @@ void KeyFrame::PostLoad(map<long unsigned int, KeyFrame*>& mpKFid, map<long unsi
+     for(map<long unsigned int, int>::const_iterator it = mBackupConnectedKeyFrameIdWeights.begin(), end = mBackupConnectedKeyFrameIdWeights.end();
+         it != end; ++it)
+     {
+-        KeyFrame* pKFi = mpKFid[it->first];
+-        mConnectedKeyFrameWeights[pKFi] = it->second;
++        map<long unsigned int, KeyFrame*>::const_iterator keyFrameIt =
++            mpKFid.find(it->first);
++        if(keyFrameIt == mpKFid.end() || !keyFrameIt->second)
++            throw std::runtime_error("Atlas has an invalid connected KeyFrame");
++        mConnectedKeyFrameWeights[keyFrameIt->second] = it->second;
+     }
+ 
+     // Restore parent KeyFrame
+     if(mBackupParentId>=0)
+-        mpParent = mpKFid[mBackupParentId];
++    {
++        map<long unsigned int, KeyFrame*>::const_iterator parentIt =
++            mpKFid.find(mBackupParentId);
++        if(parentIt == mpKFid.end() || !parentIt->second)
++            throw std::runtime_error("Atlas has an invalid parent KeyFrame");
++        mpParent = parentIt->second;
++    }
+ 
+     // KeyFrame childrens
+     mspChildrens.clear();
+     for(vector<long unsigned int>::const_iterator it = mvBackupChildrensId.begin(), end = mvBackupChildrensId.end(); it!=end; ++it)
+     {
+-        mspChildrens.insert(mpKFid[*it]);
++        map<long unsigned int, KeyFrame*>::const_iterator childIt =
++            mpKFid.find(*it);
++        if(childIt == mpKFid.end() || !childIt->second)
++            throw std::runtime_error("Atlas has an invalid child KeyFrame");
++        mspChildrens.insert(childIt->second);
+     }
+ 
+     // Loop edge KeyFrame
+     mspLoopEdges.clear();
+     for(vector<long unsigned int>::const_iterator it = mvBackupLoopEdgesId.begin(), end = mvBackupLoopEdgesId.end(); it != end; ++it)
+     {
+-        mspLoopEdges.insert(mpKFid[*it]);
++        map<long unsigned int, KeyFrame*>::const_iterator loopIt =
++            mpKFid.find(*it);
++        if(loopIt == mpKFid.end() || !loopIt->second)
++            throw std::runtime_error("Atlas has an invalid loop-edge KeyFrame");
++        mspLoopEdges.insert(loopIt->second);
+     }
+ 
+     // Merge edge KeyFrame
+     mspMergeEdges.clear();
+     for(vector<long unsigned int>::const_iterator it = mvBackupMergeEdgesId.begin(), end = mvBackupMergeEdgesId.end(); it != end; ++it)
+     {
+-        mspMergeEdges.insert(mpKFid[*it]);
++        map<long unsigned int, KeyFrame*>::const_iterator mergeIt =
++            mpKFid.find(*it);
++        if(mergeIt == mpKFid.end() || !mergeIt->second)
++            throw std::runtime_error("Atlas has an invalid merge-edge KeyFrame");
++        mspMergeEdges.insert(mergeIt->second);
+     }
+ 
+     //Camera data
+     if(mnBackupIdCamera >= 0)
+     {
+-        mpCamera = mpCamId[mnBackupIdCamera];
++        map<unsigned int, GeometricCamera*>::const_iterator cameraIt =
++            mpCamId.find(mnBackupIdCamera);
++        if(cameraIt == mpCamId.end() || !cameraIt->second)
++            throw std::runtime_error("Atlas has an invalid primary camera");
++        mpCamera = cameraIt->second;
+     }
+     else
+     {
+-        cout << "ERROR: There is not a main camera in KF " << mnId << endl;
++        throw std::runtime_error("Atlas KeyFrame has no primary camera");
+     }
+     if(mnBackupIdCamera2 >= 0)
+     {
+-        mpCamera2 = mpCamId[mnBackupIdCamera2];
++        map<unsigned int, GeometricCamera*>::const_iterator cameraIt =
++            mpCamId.find(mnBackupIdCamera2);
++        mpCamera2 = cameraIt != mpCamId.end() ? cameraIt->second :
++            static_cast<GeometricCamera*>(NULL);
+     }
+ 
+     //Inertial data
+     if(mBackupPrevKFId != -1)
+     {
+-        mPrevKF = mpKFid[mBackupPrevKFId];
++        map<long unsigned int, KeyFrame*>::const_iterator previousIt =
++            mpKFid.find(mBackupPrevKFId);
++        if(previousIt == mpKFid.end() || !previousIt->second)
++            throw std::runtime_error("Atlas has an invalid previous KeyFrame");
++        mPrevKF = previousIt->second;
+     }
+     if(mBackupNextKFId != -1)
+     {
+-        mNextKF = mpKFid[mBackupNextKFId];
++        map<long unsigned int, KeyFrame*>::const_iterator nextIt =
++            mpKFid.find(mBackupNextKFId);
++        if(nextIt == mpKFid.end() || !nextIt->second)
++            throw std::runtime_error("Atlas has an invalid next KeyFrame");
++        mNextKF = nextIt->second;
+     }
+     mpImuPreintegrated = &mBackupImuPreintegrated;
+ 
+diff --git a/src/LocalMapping.cc b/src/LocalMapping.cc
+index 53df332..ef19578 100644
+--- a/src/LocalMapping.cc
++++ b/src/LocalMapping.cc
+@@ -31,7 +31,7 @@ namespace ORB_SLAM3
+ {
+ 
+ LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
+-    mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
++    mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mpMapToReset(nullptr), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), mpLoopCloser(nullptr), mpTracker(nullptr), mpCurrentKeyFrame(nullptr), bInitializing(false),
+     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
+     mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
+ {
+diff --git a/src/Map.cc b/src/Map.cc
+index f1f8cd0..19d9402 100644
+--- a/src/Map.cc
++++ b/src/Map.cc
+@@ -20,6 +20,7 @@
+ #include "Map.h"
+ 
+ #include<mutex>
++#include<stdexcept>
+ 
+ namespace ORB_SLAM3
+ {
+@@ -358,25 +359,11 @@ void Map::SetLastMapChange(int currentChangeId)
+ 
+ void Map::PreSave(std::set<GeometricCamera*> &spCams)
+ {
+-    int nMPWithoutObs = 0;
+-    for(MapPoint* pMPi : mspMapPoints)
++    std::set<KeyFrame*> spValidKeyFrames;
++    for(KeyFrame* pKFi : mspKeyFrames)
+     {
+-        if(!pMPi || pMPi->isBad())
+-            continue;
+-
+-        if(pMPi->GetObservations().size() == 0)
+-        {
+-            nMPWithoutObs++;
+-        }
+-        map<KeyFrame*, std::tuple<int,int>> mpObs = pMPi->GetObservations();
+-        for(map<KeyFrame*, std::tuple<int,int>>::iterator it= mpObs.begin(), end=mpObs.end(); it!=end; ++it)
+-        {
+-            if(it->first->GetMap() != this || it->first->isBad())
+-            {
+-                pMPi->EraseObservation(it->first);
+-            }
+-
+-        }
++        if(pKFi && !pKFi->isBad())
++            spValidKeyFrames.insert(pKFi);
+     }
+ 
+     // Saves the id of KF origins
+@@ -384,40 +371,53 @@ void Map::PreSave(std::set<GeometricCamera*> &spCams)
+     mvBackupKeyFrameOriginsId.reserve(mvpKeyFrameOrigins.size());
+     for(int i = 0, numEl = mvpKeyFrameOrigins.size(); i < numEl; ++i)
+     {
+-        mvBackupKeyFrameOriginsId.push_back(mvpKeyFrameOrigins[i]->mnId);
++        if(spValidKeyFrames.find(mvpKeyFrameOrigins[i]) != spValidKeyFrames.end())
++            mvBackupKeyFrameOriginsId.push_back(mvpKeyFrameOrigins[i]->mnId);
+     }
+ 
+-
+-    // Backup of MapPoints
+-    mvpBackupMapPoints.clear();
++    std::set<MapPoint*> spValidMapPoints;
+     for(MapPoint* pMPi : mspMapPoints)
+     {
+         if(!pMPi || pMPi->isBad())
+             continue;
++        map<KeyFrame*, std::tuple<int,int>> observations =
++            pMPi->GetObservations();
++        for(map<KeyFrame*, std::tuple<int,int>>::const_iterator it =
++                observations.begin(), end = observations.end();
++            it != end; ++it)
++        {
++            if(spValidKeyFrames.find(it->first) != spValidKeyFrames.end())
++            {
++                spValidMapPoints.insert(pMPi);
++                break;
++            }
++        }
++    }
+ 
++    // Backup of MapPoints
++    mvpBackupMapPoints.clear();
++    for(MapPoint* pMPi : spValidMapPoints)
++    {
+         mvpBackupMapPoints.push_back(pMPi);
+-        pMPi->PreSave(mspKeyFrames,mspMapPoints);
++        pMPi->PreSave(spValidKeyFrames,spValidMapPoints);
+     }
+ 
+     // Backup of KeyFrames
+     mvpBackupKeyFrames.clear();
+-    for(KeyFrame* pKFi : mspKeyFrames)
++    for(KeyFrame* pKFi : spValidKeyFrames)
+     {
+-        if(!pKFi || pKFi->isBad())
+-            continue;
+-
+         mvpBackupKeyFrames.push_back(pKFi);
+-        pKFi->PreSave(mspKeyFrames,mspMapPoints, spCams);
++        pKFi->PreSave(spValidKeyFrames,spValidMapPoints, spCams);
+     }
+ 
+     mnBackupKFinitialID = -1;
+-    if(mpKFinitial)
++    if(spValidKeyFrames.find(mpKFinitial) != spValidKeyFrames.end())
+     {
+         mnBackupKFinitialID = mpKFinitial->mnId;
+     }
+ 
+     mnBackupKFlowerID = -1;
+-    if(mpKFlowerID)
++    if(spValidKeyFrames.find(mpKFlowerID) != spValidKeyFrames.end())
+     {
+         mnBackupKFlowerID = mpKFlowerID->mnId;
+     }
+@@ -472,19 +472,31 @@ void Map::PostLoad(KeyFrameDatabase* pKFDB, ORBVocabulary* pORBVoc/*, map<long u
+ 
+     if(mnBackupKFinitialID != -1)
+     {
+-        mpKFinitial = mpKeyFrameId[mnBackupKFinitialID];
++        map<long unsigned int, KeyFrame*>::const_iterator initialIt =
++            mpKeyFrameId.find(mnBackupKFinitialID);
++        if(initialIt == mpKeyFrameId.end() || !initialIt->second)
++            throw std::runtime_error("Atlas has an invalid initial KeyFrame");
++        mpKFinitial = initialIt->second;
+     }
+ 
+     if(mnBackupKFlowerID != -1)
+     {
+-        mpKFlowerID = mpKeyFrameId[mnBackupKFlowerID];
++        map<long unsigned int, KeyFrame*>::const_iterator lowerIt =
++            mpKeyFrameId.find(mnBackupKFlowerID);
++        if(lowerIt == mpKeyFrameId.end() || !lowerIt->second)
++            throw std::runtime_error("Atlas has an invalid lowest KeyFrame");
++        mpKFlowerID = lowerIt->second;
+     }
+ 
+     mvpKeyFrameOrigins.clear();
+     mvpKeyFrameOrigins.reserve(mvBackupKeyFrameOriginsId.size());
+     for(int i = 0; i < mvBackupKeyFrameOriginsId.size(); ++i)
+     {
+-        mvpKeyFrameOrigins.push_back(mpKeyFrameId[mvBackupKeyFrameOriginsId[i]]);
++        map<long unsigned int, KeyFrame*>::const_iterator it =
++            mpKeyFrameId.find(mvBackupKeyFrameOriginsId[i]);
++        if(it == mpKeyFrameId.end() || !it->second)
++            throw std::runtime_error("Atlas has an invalid origin KeyFrame");
++        mvpKeyFrameOrigins.push_back(it->second);
+     }
+ 
+     mvpBackupMapPoints.clear();
+diff --git a/src/MapPoint.cc b/src/MapPoint.cc
+index 1cf802c..ccc09e2 100644
+--- a/src/MapPoint.cc
++++ b/src/MapPoint.cc
+@@ -20,6 +20,7 @@
+ #include "ORBmatcher.h"
+ 
+ #include<mutex>
++#include<stdexcept>
+ 
+ namespace ORB_SLAM3
+ {
+@@ -586,45 +587,63 @@ void MapPoint::PreSave(set<KeyFrame*>& spKF,set<MapPoint*>& spMP)
+             mBackupObservationsId1[it->first->mnId] = get<0>(it->second);
+             mBackupObservationsId2[it->first->mnId] = get<1>(it->second);
+         }
+-        else
+-        {
+-            EraseObservation(pKFi);
+-        }
+     }
+ 
+     // Save the id of the reference KF
+-    if(spKF.find(mpRefKF) != spKF.end())
++    KeyFrame* pBackupRefKF = mpRefKF;
++    if(spKF.find(pBackupRefKF) == spKF.end())
+     {
+-        mBackupRefKFId = mpRefKF->mnId;
++        pBackupRefKF = static_cast<KeyFrame*>(NULL);
++        for(std::map<KeyFrame*,std::tuple<int,int> >::const_iterator it =
++                mObservations.begin(), end = mObservations.end();
++            it != end; ++it)
++        {
++            if(spKF.find(it->first) != spKF.end())
++            {
++                pBackupRefKF = it->first;
++                break;
++            }
++        }
+     }
++    if(!pBackupRefKF)
++        throw std::runtime_error("MapPoint has no serializable reference KeyFrame");
++    mBackupRefKFId = pBackupRefKF->mnId;
+ }
+ 
+ void MapPoint::PostLoad(map<long unsigned int, KeyFrame*>& mpKFid, map<long unsigned int, MapPoint*>& mpMPid)
+ {
+-    mpRefKF = mpKFid[mBackupRefKFId];
++    map<long unsigned int, KeyFrame*>::const_iterator refIt =
++        mpKFid.find(mBackupRefKFId);
++    mpRefKF = refIt != mpKFid.end() ? refIt->second :
++        static_cast<KeyFrame*>(NULL);
+     if(!mpRefKF)
+     {
+-        cout << "ERROR: MP without KF reference " << mBackupRefKFId << "; Num obs: " << nObs << endl;
++        throw std::runtime_error("Atlas MapPoint has no reference KeyFrame");
+     }
+     mpReplaced = static_cast<MapPoint*>(NULL);
+     if(mBackupReplacedId>=0)
+     {
+         map<long unsigned int, MapPoint*>::iterator it = mpMPid.find(mBackupReplacedId);
+-        if (it != mpMPid.end())
+-            mpReplaced = it->second;
++        if(it == mpMPid.end() || !it->second)
++            throw std::runtime_error("Atlas MapPoint has an invalid replacement");
++        mpReplaced = it->second;
+     }
+ 
+     mObservations.clear();
+ 
+     for(map<long unsigned int, int>::const_iterator it = mBackupObservationsId1.begin(), end = mBackupObservationsId1.end(); it != end; ++it)
+     {
+-        KeyFrame* pKFi = mpKFid[it->first];
++        map<long unsigned int, KeyFrame*>::const_iterator keyFrameIt =
++            mpKFid.find(it->first);
++        KeyFrame* pKFi = keyFrameIt != mpKFid.end() ? keyFrameIt->second :
++            static_cast<KeyFrame*>(NULL);
+         map<long unsigned int, int>::const_iterator it2 = mBackupObservationsId2.find(it->first);
++        if(it2 == mBackupObservationsId2.end())
++            throw std::runtime_error("Atlas MapPoint has an incomplete observation");
+         std::tuple<int, int> indexes = tuple<int,int>(it->second,it2->second);
+-        if(pKFi)
+-        {
+-           mObservations[pKFi] = indexes;
+-        }
++        if(!pKFi)
++            throw std::runtime_error("Atlas MapPoint has an invalid observation KeyFrame");
++        mObservations[pKFi] = indexes;
+     }
+ 
+     mBackupObservationsId1.clear();
+diff --git a/src/System.cc b/src/System.cc
+index 60d9c51..2155883 100644
+--- a/src/System.cc
++++ b/src/System.cc
+@@ -292,6 +292,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+         }
+     }
+ 
++    bool activeMapResetApplied = false;
+     // Check reset
+     {
+         unique_lock<mutex> lock(mMutexReset);
+@@ -300,11 +301,13 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+             mpTracker->Reset();
+             mbReset = false;
+             mbResetActiveMap = false;
++            activeMapResetApplied = true;
+         }
+         else if(mbResetActiveMap)
+         {
+             mpTracker->ResetActiveMap();
+             mbResetActiveMap = false;
++            activeMapResetApplied = true;
+         }
+     }
+ 
+@@ -321,6 +324,11 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+     mTrackingState = mpTracker->mState;
+     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
+     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
++    mImuInitAccelerationDeltaAvailable =
++        mpTracker->GetImuInitAccelerationDiagnostic(
++            mImuInitAccelerationDelta, mImuInitAccelerationThreshold);
++    if(activeMapResetApplied)
++        ++mActiveMapResetCount;
+ 
+     return Tcw;
+ }
+@@ -514,6 +522,40 @@ void System::ResetActiveMap()
+ 
+ void System::Shutdown()
+ {
++    {
++        unique_lock<mutex> lock(mMutexShutdown);
++        if(mbShutdownCompleted)
++        {
++            if(mptViewer &&
++               mptViewer->get_id() != std::this_thread::get_id() &&
++               mptViewer->joinable())
++                mptViewer->join();
++            return;
++        }
++        if(mbShutdownInProgress)
++        {
++            if(mShutdownOwner == std::this_thread::get_id())
++                return;
++            // An external shutdown owner waits for Viewer::SetFinish() before
++            // joining this thread. If the viewer concurrently selects Stop,
++            // waiting here would create a circular wait. Let the viewer
++            // unwind its run loop; the external owner remains responsible for
++            // completing and publishing the shutdown state.
++            if(mptViewer &&
++               mptViewer->get_id() == std::this_thread::get_id())
++                return;
++            mShutdownCondition.wait(
++                lock, [this] { return mbShutdownCompleted; });
++            if(mptViewer &&
++               mptViewer->get_id() != std::this_thread::get_id() &&
++               mptViewer->joinable())
++                mptViewer->join();
++            return;
++        }
++        mbShutdownInProgress = true;
++        mShutdownOwner = std::this_thread::get_id();
++    }
++
+     {
+         unique_lock<mutex> lock(mMutexReset);
+         mbShutDown = true;
+@@ -523,27 +565,35 @@ void System::Shutdown()
+ 
+     mpLocalMapper->RequestFinish();
+     mpLoopCloser->RequestFinish();
+-    /*if(mpViewer)
++    if(mpViewer)
+     {
+         mpViewer->RequestFinish();
+-        while(!mpViewer->isFinished())
+-            usleep(5000);
+-    }*/
++        // Shutdown may also be requested by the viewer menu itself. Waiting
++        // for the current thread in that case would deadlock; an external
++        // caller must wait until the Pangolin/Qt objects have been destroyed
++        // on their owning viewer thread.
++        if(!mptViewer ||
++           mptViewer->get_id() != std::this_thread::get_id())
++        {
++            while(!mpViewer->isFinished())
++                usleep(5000);
++            if(mptViewer && mptViewer->joinable())
++                mptViewer->join();
++        }
++    }
+ 
+-    // Wait until all thread have effectively stopped
+-    /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
++    // Atlas serialization traverses the complete map graph. Do not start it
++    // while local mapping, loop closing, or global BA can still mutate that
++    // graph.
++    while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
+     {
+         if(!mpLocalMapper->isFinished())
+-            cout << "mpLocalMapper is not finished" << endl;*/
+-        /*if(!mpLoopCloser->isFinished())
+-            cout << "mpLoopCloser is not finished" << endl;
+-        if(mpLoopCloser->isRunningGBA()){
+-            cout << "mpLoopCloser is running GBA" << endl;
+-            cout << "break anyway..." << endl;
+-            break;
+-        }*/
+-        /*usleep(5000);
+-    }*/
++            usleep(1000);
++        if(!mpLoopCloser->isFinished())
++            usleep(1000);
++        if(mpLoopCloser->isRunningGBA())
++            usleep(1000);
++    }
+ 
+     if(!mStrSaveAtlasToFile.empty())
+     {
+@@ -558,7 +608,12 @@ void System::Shutdown()
+     mpTracker->PrintTimeStats();
+ #endif
+ 
+-
++    {
++        unique_lock<mutex> lock(mMutexShutdown);
++        mbShutdownCompleted = true;
++        mbShutdownInProgress = false;
++    }
++    mShutdownCondition.notify_all();
+ }
+ 
+ bool System::isShutDown() {
+@@ -1336,8 +1391,51 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
+     return mTrackedKeyPointsUn;
+ }
+ 
++bool System::IsImuInitialized()
++{
++    return mpAtlas && mpAtlas->isImuInitialized();
++}
++
++bool System::IsInertialBA2Finished()
++{
++    if(!mpAtlas)
++        return false;
++    Map* pMap = mpAtlas->GetCurrentMap();
++    return pMap && pMap->GetIniertialBA2();
++}
++
++bool System::GetImuInitAccelerationDiagnostic(float &delta, float &threshold)
++{
++    unique_lock<mutex> lock(mMutexState);
++    delta = mImuInitAccelerationDelta;
++    threshold = mImuInitAccelerationThreshold;
++    return mImuInitAccelerationDeltaAvailable;
++}
++
++std::uint64_t System::GetActiveMapResetCount()
++{
++    unique_lock<mutex> lock(mMutexState);
++    return mActiveMapResetCount;
++}
++
++std::uint64_t System::GetActiveMapChangeIndex()
++{
++    if(!mpAtlas)
++        return 0;
++    return static_cast<std::uint64_t>(mpAtlas->GetLastBigChangeIdx());
++}
++
++bool System::IsResetPending()
++{
++    unique_lock<mutex> lock(mMutexReset);
++    return mbReset || mbResetActiveMap;
++}
++
+ double System::GetTimeFromIMUInit()
+ {
++    if(!mpLocalMapper)
++        return 0.f;
++
+     double aux = mpLocalMapper->GetCurrKFTime()-mpLocalMapper->mFirstTs;
+     if ((aux>0.) && mpAtlas->isImuInitialized())
+         return mpLocalMapper->GetCurrKFTime()-mpLocalMapper->mFirstTs;
+@@ -1546,4 +1644,3 @@ string System::CalculateCheckSum(string filename, int type)
+ }
+ 
+ } //namespace ORB_SLAM
+-
+diff --git a/src/Tracking.cc b/src/Tracking.cc
+index 5191451..68c295e 100644
+--- a/src/Tracking.cc
++++ b/src/Tracking.cc
+@@ -29,7 +29,10 @@
+ #include "MLPnPsolver.h"
+ #include "GeometricTools.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <iostream>
++#include <stdexcept>
+ 
+ #include <mutex>
+ #include <chrono>
+@@ -94,6 +97,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
+         }
+     }
+ 
++    if(sensor==System::IMU_MONOCULAR || sensor==System::IMU_STEREO || sensor==System::IMU_RGBD)
++    {
++        cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
++        cv::FileNode thresholdNode = fSettings["IMU.InitAccelerationThreshold"];
++        if(!thresholdNode.empty())
++        {
++            if(!thresholdNode.isReal())
++                throw std::runtime_error("IMU.InitAccelerationThreshold must be real");
++            mImuInitAccelerationThreshold = thresholdNode.real();
++            if(!std::isfinite(mImuInitAccelerationThreshold) || mImuInitAccelerationThreshold <= 0.0f)
++                throw std::runtime_error("IMU.InitAccelerationThreshold must be finite and positive");
++        }
++    }
++
+     initID = 0; lastID = 0;
+     mbInitWith3KFs = false;
+     mnNumDataset = 0;
+@@ -1454,6 +1471,7 @@ bool Tracking::GetStepByStep()
+ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
+ {
+     //cout << "GrabImageStereo" << endl;
++    mLastImuInitAccelerationDeltaAvailable = false;
+ 
+     mImGray = imRectLeft;
+     cv::Mat imGrayRight = imRectRight;
+@@ -2344,9 +2362,19 @@ void Tracking::StereoInitialization()
+                 return;
+             }
+ 
+-            if (!mFastInit && (mCurrentFrame.mpImuPreintegratedFrame->avgA-mLastFrame.mpImuPreintegratedFrame->avgA).norm()<0.5)
++            mLastImuInitAccelerationDelta =
++                (mCurrentFrame.mpImuPreintegratedFrame->avgA -
++                 mLastFrame.mpImuPreintegratedFrame->avgA).norm();
++            mLastImuInitAccelerationDeltaAvailable = true;
++            if (!mFastInit &&
++                mLastImuInitAccelerationDelta <
++                    mImuInitAccelerationThreshold)
+             {
+-                cout << "not enough acceleration" << endl;
++                if(mCurrentFrame.mnId % std::max(1, mMaxFrames) == 0)
++                    cout << "not enough acceleration (delta="
++                         << mLastImuInitAccelerationDelta
++                         << ", threshold="
++                         << mImuInitAccelerationThreshold << ")" << endl;
+                 return;
+             }
+ 
+@@ -4065,6 +4093,13 @@ int Tracking::GetMatchesInliers()
+     return mnMatchesInliers;
+ }
+ 
++bool Tracking::GetImuInitAccelerationDiagnostic(float &delta, float &threshold)
++{
++    delta = mLastImuInitAccelerationDelta;
++    threshold = mImuInitAccelerationThreshold;
++    return mLastImuInitAccelerationDeltaAvailable;
++}
++
+ void Tracking::SaveSubTrajectory(string strNameFile_frames, string strNameFile_kf, string strFolder)
+ {
+     mpSystem->SaveTrajectoryEuRoC(strFolder + strNameFile_frames);
+diff --git a/src/Viewer.cc b/src/Viewer.cc
+index 18f23f0..9686396 100644
+--- a/src/Viewer.cc
++++ b/src/Viewer.cc
+@@ -380,6 +380,11 @@ void Viewer::Run()
+             break;
+     }
+ 
++    // The window and its backend-specific timers must be destroyed on the
++    // viewer thread that created them. Leaving this to process teardown can
++    // make Qt destroy timers from the main thread.
++    cv::destroyAllWindows();
++    pangolin::DestroyWindow("ORB-SLAM3: Map Viewer");
+     SetFinish();
+ }
+ 
