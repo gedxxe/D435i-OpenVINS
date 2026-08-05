@@ -746,8 +746,39 @@ def parse_imu(path: Path, tracking: TrackingStats) -> None:
 def quaternion_return_angle_deg(
     first: tuple[float, ...], last: tuple[float, ...]
 ) -> float:
-    dot = abs(sum(left * right for left, right in zip(first, last)))
+    first_norm = math.sqrt(sum(value * value for value in first))
+    last_norm = math.sqrt(sum(value * value for value in last))
+    if first_norm <= 0.0 or last_norm <= 0.0:
+        raise BenchmarkError("cannot compare a zero-norm quaternion")
+    dot = abs(
+        sum(left * right for left, right in zip(first, last))
+        / (first_norm * last_norm)
+    )
     return math.degrees(2.0 * math.acos(min(1.0, max(-1.0, dot))))
+
+
+def require_pose_equivalent(
+    first: tuple[float, ...],
+    second: tuple[float, ...],
+    label: str,
+) -> None:
+    for component, (first_value, second_value) in enumerate(
+        zip(first[:3], second[:3]), 1
+    ):
+        require_close(
+            first_value,
+            second_value,
+            f"{label} translation component {component}",
+            FLOAT_TOLERANCE,
+        )
+    orientation_delta_deg = quaternion_return_angle_deg(
+        first[3:], second[3:]
+    )
+    if orientation_delta_deg > 1e-4:
+        raise BenchmarkError(
+            f"{label} orientation differs by "
+            f"{orientation_delta_deg:.9f} deg"
+        )
 
 
 def parse_trajectory(
@@ -1566,6 +1597,42 @@ def evaluate(args: argparse.Namespace) -> None:
         allow_empty=True,
         minimum_rows=1,
     )
+    if pose_rate_contract:
+        tracking_poses = tuple(
+            (row.timestamp_s, row.pose)
+            for row in tracking.rows
+            if row.pose is not None
+        )
+        require_equal(
+            len(tracking_poses),
+            0 if visual is None else visual.rows,
+            "tracking pose rows versus visual trajectory rows",
+        )
+        if visual is not None:
+            for index, (
+                (tracking_timestamp, tracking_pose),
+                visual_timestamp,
+                visual_pose,
+            ) in enumerate(
+                zip(
+                    tracking_poses,
+                    visual.timestamps_s,
+                    visual.poses,
+                ),
+                1,
+            ):
+                assert tracking_pose is not None
+                require_close(
+                    tracking_timestamp,
+                    visual_timestamp,
+                    f"tracking versus visual timestamp {index}",
+                    TIMESTAMP_TOLERANCE_S,
+                )
+                require_pose_equivalent(
+                    tracking_pose,
+                    visual_pose,
+                    f"tracking versus visual pose {index}",
+                )
 
     accepted_path = run_dir / "live_camera_trajectory_tum.txt"
     candidate_path = run_dir / "live_camera_trajectory_candidate_tum.txt"
@@ -2082,16 +2149,11 @@ def evaluate(args: argparse.Namespace) -> None:
                 f"candidate versus visual timestamp {candidate_index}",
                 TIMESTAMP_TOLERANCE_S,
             )
-            for component, (candidate_value, visual_value) in enumerate(
-                zip(candidate_pose, visual.poses[visual_index]), 1
-            ):
-                require_close(
-                    candidate_value,
-                    visual_value,
-                    "candidate versus visual pose "
-                    f"{candidate_index} component {component}",
-                    FLOAT_TOLERANCE,
-                )
+            require_pose_equivalent(
+                candidate_pose,
+                visual.poses[visual_index],
+                f"candidate versus visual pose {candidate_index}",
+            )
 
     clean_transport_fields = (
         "dropped_imu",
@@ -2372,7 +2434,7 @@ def evaluate(args: argparse.Namespace) -> None:
     )
     result_lines = [
         "%YAML:1.0",
-        'format: "ovrs-orbslam3-live-evaluation-v8"',
+        'format: "ovrs-orbslam3-live-evaluation-v9"',
         f"state: {yaml_quote(state)}",
         f"live_gate_passed: {bool_yaml(evaluation_passed)}",
         "live_continuity_gate_passed: "
@@ -2428,6 +2490,12 @@ def evaluate(args: argparse.Namespace) -> None:
             "PINNED_LIVE_AND_RECOMPUTED"
             if pose_rate_contract
             else "LEGACY_NOT_EVALUATED"
+        ),
+        "pose_artifact_binding_state: "
+        + yaml_quote(
+            "TRACKING_TO_VISUAL_BOUND"
+            if pose_rate_contract
+            else "LEGACY_TRACKING_POSE_UNAVAILABLE"
         ),
         "maximum_pose_linear_speed_m_s: "
         f"{maximum_pose_linear_speed_m_s if pose_rate_contract else 0.0:.9f}",

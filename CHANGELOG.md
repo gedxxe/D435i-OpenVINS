@@ -10,13 +10,16 @@ current tree; they must not be read as claims that historical Git tags exist.
   ORB-SLAM3 path. Bundle-v6/runtime-provenance-v7 records every pose-valid
   frame in the tracking CSV and rejects finite inter-frame output above
   2.0 m/s or 6.0 rad/s before it can enter the canonical trajectory.
-  Evaluator-v8 independently recomputes both rates, attributes post-acceptance
+  Evaluator-v9 independently recomputes both rates, attributes post-acceptance
   failures, and preserves v4/v5 evidence under its original contract. The
   same gate audit fixed stability-window preloading while a reset is pending
   and now restarts stability on a pre-acceptance map-frame change. The
   retained v26 accepted trace peaked at 0.384 m/s and 1.822 rad/s; those
   margins justify a broad discontinuity envelope, not a dynamics or accuracy
-  claim. No connected-camera run has validated the changed binary.
+  claim. Evaluator-v9 also binds every bundle-v6 tracking pose to its visual
+  trajectory row, compares quaternion orientation after normalization with
+  q/-q equivalence, and rejects cross-artifact pose corruption. No
+  connected-camera run has validated the changed binary.
 - Hardened the isolated live ORB-SLAM3 canonical-trajectory gate with a
   provenance-pinned visual-support floor. New bundle-v5/runtime-provenance-v6
   runs require at least 50 non-null tracked map points throughout the

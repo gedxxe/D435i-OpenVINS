@@ -376,8 +376,12 @@ for that exact hardware, configuration, and test.
       evidence.
 - [ ] Every bundle-v6 accepted row remained within the pinned
       `maximum_pose_linear_speed_m_s` and
-      `maximum_pose_angular_speed_rad_s` envelope; evaluator-v8 independently
+      `maximum_pose_angular_speed_rad_s` envelope; evaluator-v9 independently
       recomputed both rates from the recorded pose fields.
+- [ ] Evaluator-v9 reported `TRACKING_TO_VISUAL_BOUND`, proving every
+      bundle-v6 pose timestamp, translation, and sign-invariant normalized
+      orientation matched the diagnostic trajectory before canonical-file
+      acceptance was evaluated.
 - [ ] The independent evaluator found nonoverlapping start/end windows with
       sufficient time coverage and samples.
 - [ ] Both endpoint windows stayed inside their predeclared position and

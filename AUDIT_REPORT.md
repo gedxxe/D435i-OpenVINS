@@ -917,6 +917,40 @@ legacy bundle-v4/v5 re-evaluation and independent attribution of a synthetic
 connected D435i run has exercised bundle-v6, so live behavior, accuracy,
 repeatability, relocalization, and navigation readiness remain unvalidated.
 
+### 2026-08-05 cross-artifact pose binding audit
+
+Evaluator-v8 recomputed bundle-v6 pose rates from the tracking CSV and already
+matched canonical candidates to the visual trajectory, but it did not bind
+the tracking-pose values themselves to that trajectory. A corrupted or mixed
+artifact set could therefore present one pose sequence to the rate gate and a
+different sequence to canonical-file validation.
+
+Evaluator-v9 requires a one-to-one timestamp and translation match between
+every bundle-v6 tracking pose and visual diagnostic row. Orientation matching
+normalizes both quaternions and treats q/-q as equivalent. This normalization
+also fixes a numerical defect where identical rounded, near-unit quaternions
+could appear approximately 0.002 degrees apart. Canonical candidates remain
+matched to the bound visual rows, so the tracking, visual, and candidate
+records now form one coherent pose chain.
+
+The dependency-light suite contains 54 passing cases, including explicit
+tracking/visual translation, orientation, and timestamp corruption rejection,
+q/-q equivalence across artifacts, legacy-v4/v5 compatibility, and the
+existing endpoint-window tests. The
+current evaluator-v9 re-evaluated retained v26 as
+`LIVE_GATE_PASS_CONTINUITY_NOT_ACCURACY_VALIDATED` with a maximum canonical
+0.383841 m/s and 1.821121 rad/s, while the later five-reset/no-BA2 run remained
+`LIVE_GATE_FAILED`. Both are bundle-v4 evidence and remain explicitly
+`LEGACY_TRACKING_POSE_UNAVAILABLE`; neither is retroactively promoted to the
+bundle-v6 contract. No new camera motion was possible during this offline
+audit.
+
+The supported Ubuntu build completed against repository-local Ceres 2.1.0,
+patched librealsense 2.57.3, and patched OpenVINS v2.7 with ROS and ArUco
+disabled. All five registered CTest targets passed. A subsequent
+`preflight_ubuntu.sh --require-build` reported zero errors and one expected
+warning because no physical D435i was available.
+
 ## Historical evidence
 
 See [docs/audit_history.md](docs/audit_history.md) for the full chronology,

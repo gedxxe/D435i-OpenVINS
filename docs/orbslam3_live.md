@@ -343,13 +343,16 @@ Passing the continuity gate without a physical start/end reference yields
 rigid-stop tolerances yields a stronger return-consistency state, but still
 does not establish full-trajectory accuracy without independent ground truth.
 New bundle-v6/runtime-provenance-v7 runs report `CAPTURE_TIME_ATTESTED`.
-Evaluator-v8 additionally recomputes the bounded pre-acceptance and strict
+Evaluator-v9 additionally recomputes the bounded pre-acceptance and strict
 zero-post-acceptance reset counts, minimum tracked-map-point contract, and
-linear/angular pose-rate envelope from every tracking row. Bundle-v4 and
-bundle-v5 runs remain re-evaluable under their original contracts;
-evaluator-v8 reports pose-rate evaluation as legacy-disabled and does not
-retroactively upgrade their acceptance. A later binary must never be
-presented as an older run's capture-time executable.
+linear/angular pose-rate envelope from every tracking row. It then binds each
+bundle-v6 tracking pose to the visual trajectory by timestamp, translation,
+and normalized sign-invariant orientation before checking candidate
+publication. Bundle-v4 and bundle-v5 runs remain re-evaluable under their
+original contracts; evaluator-v9 reports their tracking-pose binding and
+pose-rate checks as legacy-unavailable rather than retroactively upgrading
+acceptance. A later binary must never be presented as an older run's
+capture-time executable.
 
 The live process also fails closed when either the raw stereo callback or raw
 IMU callback is silent for longer than the pinned

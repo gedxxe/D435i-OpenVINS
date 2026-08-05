@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import math
 import subprocess
 import sys
 import tempfile
@@ -1142,6 +1143,52 @@ def run_live_evaluator(
         text=True,
         capture_output=True,
     )
+
+
+def update_tracking_pose(
+    run: Path,
+    timestamp_s: str,
+    *,
+    translation: tuple[str, str, str] | None = None,
+    quaternion: tuple[str, str, str, str] | None = None,
+) -> None:
+    path = run / "live_tracking_states.csv"
+    rows = list(
+        csv.DictReader(path.read_text(encoding="utf-8").splitlines())
+    )
+    matches = [row for row in rows if row["timestamp_s"] == timestamp_s]
+    if len(matches) != 1:
+        raise ValueError(
+            f"tracking fixture lacks unique timestamp {timestamp_s}"
+        )
+    row = matches[0]
+    if translation is not None:
+        for field, value in zip(
+            ("pose_tx_m", "pose_ty_m", "pose_tz_m"), translation
+        ):
+            row[field] = value
+    if quaternion is not None:
+        for field, value in zip(
+            ("pose_qx", "pose_qy", "pose_qz", "pose_qw"), quaternion
+        ):
+            row[field] = value
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def update_summary_scalar(run: Path, key: str, value: str) -> None:
+    path = run / "run_summary.yaml"
+    prefix = f"{key}: "
+    lines = path.read_text(encoding="utf-8").splitlines()
+    matches = [
+        index for index, line in enumerate(lines) if line.startswith(prefix)
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"run summary fixture lacks unique key {key}")
+    lines[matches[0]] = prefix + value
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_live_closed_loop_reference(
@@ -2356,10 +2403,14 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
             self.assertIn("live_gate_passed: true", manifest)
             self.assertIn("live_continuity_gate_passed: true", manifest)
             self.assertIn(
-                'format: "ovrs-orbslam3-live-evaluation-v8"', manifest
+                'format: "ovrs-orbslam3-live-evaluation-v9"', manifest
             )
             self.assertIn(
                 'pose_rate_contract_state: "PINNED_LIVE_AND_RECOMPUTED"',
+                manifest,
+            )
+            self.assertIn(
+                'pose_artifact_binding_state: "TRACKING_TO_VISUAL_BOUND"',
                 manifest,
             )
             self.assertIn("canonical_trajectory_rows: 6", manifest)
@@ -2419,6 +2470,11 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                 'pose_rate_contract_state: "LEGACY_NOT_EVALUATED"',
                 manifest,
             )
+            self.assertIn(
+                'pose_artifact_binding_state: '
+                '"LEGACY_TRACKING_POSE_UNAVAILABLE"',
+                manifest,
+            )
 
     def test_legacy_v5_visual_support_bundle_remains_re_evaluable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2442,6 +2498,80 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                 manifest,
             )
 
+    def test_bundle_v6_tracking_pose_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = make_orb_live_run(root)
+            update_tracking_pose(
+                inputs[0], "1.3", translation=("0.002", "0", "0")
+            )
+            output = root / "evaluation.yaml"
+
+            result = run_live_evaluator(inputs, output)
+
+            self.assertEqual(result.returncode, 4)
+            self.assertIn(
+                "tracking versus visual pose 3 translation component 1 "
+                "differs",
+                result.stderr,
+            )
+            self.assertFalse(output.exists())
+
+    def test_bundle_v6_tracking_orientation_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = make_orb_live_run(root)
+            run = inputs[0]
+            quaternion = (
+                "0",
+                "0",
+                f"{math.sin(0.01):.9f}",
+                f"{math.cos(0.01):.9f}",
+            )
+            update_tracking_pose(run, "2.4", quaternion=quaternion)
+            observed_rate = (
+                2.0
+                * math.acos(float(quaternion[3]))
+                / 0.1
+            )
+            update_summary_scalar(
+                run,
+                "maximum_observed_pose_angular_speed_rad_s",
+                f"{observed_rate:.9f}",
+            )
+            output = root / "evaluation.yaml"
+
+            result = run_live_evaluator(inputs, output)
+
+            self.assertEqual(result.returncode, 4)
+            self.assertIn(
+                "tracking versus visual pose 7 orientation differs",
+                result.stderr,
+            )
+            self.assertFalse(output.exists())
+
+    def test_bundle_v6_tracking_timestamp_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = make_orb_live_run(root)
+            visual = inputs[0] / "live_visual_tracking_trajectory_tum.txt"
+            visual.write_text(
+                visual.read_text(encoding="utf-8").replace(
+                    "1.3 0.001", "1.3001 0.001"
+                ),
+                encoding="utf-8",
+            )
+            output = root / "evaluation.yaml"
+
+            result = run_live_evaluator(inputs, output)
+
+            self.assertEqual(result.returncode, 4)
+            self.assertIn(
+                "tracking versus visual timestamp 3 differs",
+                result.stderr,
+            )
+            self.assertFalse(output.exists())
+
     def test_endpoint_windows_reject_single_frame_false_return(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2457,6 +2587,20 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                 content = content.replace("2.3 0.021", "2.3 0.100")
                 content = content.replace("2.4 0.020", "2.4 0.000")
                 path.write_text(content, encoding="utf-8")
+            update_tracking_pose(
+                run, "2.2", translation=("0.100", "0", "0")
+            )
+            update_tracking_pose(
+                run, "2.3", translation=("0.100", "0", "0")
+            )
+            update_tracking_pose(
+                run, "2.4", translation=("0.000", "0", "0")
+            )
+            update_summary_scalar(
+                run,
+                "maximum_observed_pose_linear_speed_m_s",
+                "1.000000000",
+            )
             reference = root / "closed_loop_reference.yaml"
             write_live_closed_loop_reference(reference)
             output = root / "evaluation.yaml"
@@ -2507,6 +2651,8 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
+            # q and -q are the same orientation; leave the tracking CSV at
+            # +q to prove cross-artifact matching is sign-invariant.
             reference = root / "closed_loop_reference.yaml"
             write_live_closed_loop_reference(reference)
             output = root / "evaluation.yaml"
@@ -2545,6 +2691,21 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
+            update_tracking_pose(
+                run,
+                "2.3",
+                quaternion=(
+                    "0",
+                    "0",
+                    "0.087155743",
+                    "0.996194698",
+                ),
+            )
+            update_summary_scalar(
+                run,
+                "maximum_observed_pose_angular_speed_rad_s",
+                "1.745329252",
+            )
             reference = root / "closed_loop_reference.yaml"
             write_live_closed_loop_reference(reference)
             output = root / "evaluation.yaml"
