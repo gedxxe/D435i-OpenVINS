@@ -951,6 +951,50 @@ disabled. All five registered CTest targets passed. A subsequent
 `preflight_ubuntu.sh --require-build` reported zero errors and one expected
 warning because no physical D435i was available.
 
+### 2026-08-06 stationary ORB viewer feed audit
+
+A stationary remote-viewer attempt showed that D435i transport continued even
+though the native ORB Current Frame window remained black until the camera
+moved. The live application did not contain a stationary-frame filter:
+`ovrs_orbslam3_live` continued submitting every selected stereo pair to
+`TrackStereo()`. The actual gate was in the pinned upstream tracking display
+path. While `Tracking::Track()` remained `NOT_INITIALIZED`, it returned before
+calling `FrameDrawer::Update()`. The drawer therefore retained its constructor
+black image until motion allowed stereo-inertial initialization to progress.
+
+The reviewed backend patch now calls `FrameDrawer::Update()` immediately
+before that failed-initialization return. The successful-initialization path
+continues to use its existing update, so no frame is double-applied. This is a
+viewer-only change: tracking state, the upstream `0.5 m/s^2` acceleration
+threshold, inertial BA stages, reset policy, pose acceptance, and canonical
+trajectory gates are unchanged. The patch SHA-256 is
+`74d9a08f12bef7aa59607986d5614244c9fdd0a970074fe957f6cef8edbcd6f3`;
+the rebuilt `libORB_SLAM3.so` SHA-256 is
+`9c306ec36f3153b77cecda53d6152fbbc248fd4dc3bada29ae84588c115c286d`,
+and the rebuilt live executable SHA-256 is
+`b08a19e971a269a1ca08ee892ce4ba15597e4c3e9f9175f54d857e6d1adfc281`.
+
+Connected-camera preflight passed with zero warnings for D435i serial
+`843212070146`. The retained stationary regression is
+`runs/orbslam3_live_motion_viewer_preinit_fix_20260805T205011Z` (UTC run
+suffix; 2026-08-06 local). Its captured Current Frame window visibly contains
+the live IR scene and the status `TRYING TO INITIALIZE`; screenshot SHA-256 is
+`628288e732f3df9c410c1fd7724b3e8965ebfe160a4202bf492b95e2701ecb5f`.
+During 50.22 seconds of active capture it received 4,509 stereo pairs at
+89.79 Hz, submitted 1,502 pairs to ORB at 29.91 Hz, synchronized 10,027 IMU
+samples at 199.68 Hz, dropped no stereo or IMU samples, and kept maximum
+tracking latency to 13.90 ms with no nominal-frame-budget miss.
+
+Because the camera was deliberately not moved, no frame exceeded the ORB
+excitation gate, the final state remained `NOT_INITIALIZED`, no pose was
+accepted, BA2 did not finish, and evaluator-v9 correctly returned
+`LIVE_GATE_FAILED` with seven continuity failures. This physically validates
+stationary feed visibility and clean transport only. It does not validate
+stereo-inertial initialization, trajectory continuity, accuracy, loop closure,
+relocalization, navigation, or flight readiness. Both the ORB-linked Linux
+build and portable-core build passed all five registered CTest targets,
+including all 54 dependency-light research cases.
+
 ## Historical evidence
 
 See [docs/audit_history.md](docs/audit_history.md) for the full chronology,

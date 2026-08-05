@@ -350,6 +350,11 @@ for that exact hardware, configuration, and test.
 
 - [ ] ORB remains a standalone experimental process; no pose or correction
       is connected to OpenVINS, an EKF, GPS, or flight control.
+- [ ] Before any initialization motion, `ORB-SLAM3: Current Frame` already
+      shows the current IR image while its status remains
+      `TRYING TO INITIALIZE`. A black image that appears only after movement
+      is a viewer-refresh regression, not evidence that stationary capture is
+      intentionally filtered.
 - [ ] The camera remained still for the startup cue; the startup IMU gate
       passed before deliberate initialization motion began. A gravity mismatch
       was not hidden with an ad-hoc accelerometer scale.

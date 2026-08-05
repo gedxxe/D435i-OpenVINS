@@ -1511,6 +1511,11 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
         self.assertIn("Establish the mutex", patch)
         self.assertIn("invariant before any such return", patch)
         self.assertEqual(patch.count("+    mpMutexImu = new std::mutex();"), 5)
+        self.assertIn(
+            "Keep the live image feed visible while initialization waits",
+            patch,
+        )
+        self.assertIn("+            mpFrameDrawer->Update(this);", patch)
 
     def test_pinned_realsense_patch_fails_before_null_usb_context(self) -> None:
         patch = (

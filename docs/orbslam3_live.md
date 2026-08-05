@@ -59,6 +59,13 @@ reviewed patch hash, source rate, stride, and pose frame.
 The supported launcher contains strict shell handling inside a child script.
 It does not alter the caller's interactive-shell options, and it retains and
 independently evaluates a failed run instead of hiding its nonzero status.
+
+The native `ORB-SLAM3: Current Frame` window refreshes from each submitted
+stereo pair even while tracking is still `NOT_INITIALIZED`. A stationary
+camera should therefore show the current IR image and `TRYING TO INITIALIZE`;
+it must not remain black until the camera moves. This refresh is visualization
+only. It does not generate a pose, satisfy the acceleration gate, initialize
+the IMU, finish BA2, or open the canonical trajectory gate.
 Do not paste `set -e` into an interactive terminal before a hardware attempt:
 an expected fail-closed exit would then close that shell on some terminal
 configurations.
@@ -102,7 +109,8 @@ One initial upstream `not IMU meas` line can occur before the first complete
 frame-to-frame IMU preintegration exists. Repeated `not enough acceleration`
 messages now include the exact norm used by ORB-SLAM3 and its configured
 threshold. They mean the camera has not undergone enough varied translational
-acceleration for the stereo-inertial initializer; they are not a viewer crash.
+acceleration for the stereo-inertial initializer; they are not a capture
+filter or viewer crash.
 The threshold remains pinned at its upstream value of `0.5 m/s^2` and
 `IMU.fastInit` remains disabled. Keep the camera stationary only for
 transport/viewer integrity checks. A successful SLAM run requires deliberate

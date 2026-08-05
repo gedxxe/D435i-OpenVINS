@@ -9,7 +9,7 @@ license: "GPL-3.0-or-later"
 runner: "Examples/Stereo-Inertial/stereo_inertial_euroc"
 vocabulary: "Vocabulary/ORBvoc.txt"
 patch: "patches/orbslam3-atlas-serialization-integrity.patch"
-patch_sha256: "569daedf09fc13fe93d8e68eb2be3c389b21b031c949529f7b03469318eecc87"
+patch_sha256: "74d9a08f12bef7aa59607986d5614244c9fdd0a970074fe957f6cef8edbcd6f3"
 imu_init_acceleration_threshold_m_s2: 0.5
 live_minimum_stable_inertial_seconds: 3.0
 live_maximum_tracking_interval_factor: 3.0

@@ -6,6 +6,14 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Kept the native ORB-SLAM3 Current Frame viewer live while stereo-inertial
+  initialization is still waiting for motion. The pinned backend now refreshes
+  `FrameDrawer` before returning from a failed `NOT_INITIALIZED` attempt; it
+  does not create or accept a pose, relax the acceleration threshold, or alter
+  the canonical trajectory gate. A connected stationary D435i regression
+  displayed the IR image with `TRYING TO INITIALIZE` while transport remained
+  drop-free. The deliberately motionless run was correctly rejected with no
+  pose and no BA2, so it validates viewer availability rather than SLAM.
 - Added a provenance-pinned live pose-rate continuity envelope to the isolated
   ORB-SLAM3 path. Bundle-v6/runtime-provenance-v7 records every pose-valid
   frame in the tracking CSV and rejects finite inter-frame output above
@@ -19,7 +27,8 @@ current tree; they must not be read as claims that historical Git tags exist.
   claim. Evaluator-v9 also binds every bundle-v6 tracking pose to its visual
   trajectory row, compares quaternion orientation after normalization with
   q/-q equivalence, and rejects cross-artifact pose corruption. No
-  connected-camera run has validated the changed binary.
+  connected-camera motion run has validated the pose-rate or artifact-binding
+  changes.
 - Hardened the isolated live ORB-SLAM3 canonical-trajectory gate with a
   provenance-pinned visual-support floor. New bundle-v5/runtime-provenance-v6
   runs require at least 50 non-null tracked map points throughout the

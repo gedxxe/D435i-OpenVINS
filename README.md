@@ -234,6 +234,9 @@ stable, and an active-map reset, post-acceptance tracking loss or frame gap,
 inertial-state regression, or later global map correction prevents publication
 of a continuous accepted trajectory. The maximum frame interval is derived
 from the pinned nominal ORB rate rather than hidden in the executable. A
+stationary camera still refreshes the native Current Frame IR viewer while it
+reports `TRYING TO INITIALIZE`; this viewer availability does not imply an
+accepted pose or inertial initialization. A
 separate evaluator cross-checks the raw tracking/IMU logs, canonical
 trajectory, hardware serial, bundle, backend patch, and shared-library
 provenance. Its optional rigid-stop return reference is evaluation-only and is

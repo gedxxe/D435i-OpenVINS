@@ -821,7 +821,7 @@ index 60d9c51..2155883 100644
  } //namespace ORB_SLAM
 -
 diff --git a/src/Tracking.cc b/src/Tracking.cc
-index 5191451..68c295e 100644
+index 5191451..24599b6 100644
 --- a/src/Tracking.cc
 +++ b/src/Tracking.cc
 @@ -29,7 +29,10 @@
@@ -864,7 +864,21 @@ index 5191451..68c295e 100644
  
      mImGray = imRectLeft;
      cv::Mat imGrayRight = imRectRight;
-@@ -2344,9 +2362,19 @@ void Tracking::StereoInitialization()
+@@ -1907,10 +1925,11 @@ void Tracking::Track()
+             MonocularInitialization();
+         }
+ 
+-        //mpFrameDrawer->Update(this);
+-
+         if(mState!=OK) // If rightly initialized, mState=OK
+         {
++            // Keep the live image feed visible while initialization waits for
++            // motion. This updates visualization only; no pose is accepted.
++            mpFrameDrawer->Update(this);
+             mLastFrame = Frame(mCurrentFrame);
+             return;
+         }
+@@ -2344,9 +2363,19 @@ void Tracking::StereoInitialization()
                  return;
              }
  
@@ -886,7 +900,7 @@ index 5191451..68c295e 100644
                  return;
              }
  
-@@ -4065,6 +4093,13 @@ int Tracking::GetMatchesInliers()
+@@ -4065,6 +4094,13 @@ int Tracking::GetMatchesInliers()
      return mnMatchesInliers;
  }
  
