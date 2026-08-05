@@ -30,7 +30,8 @@ public:
                                  std::uint64_t active_map_reset_count,
                                  std::uint64_t active_map_change_index,
                                  OrbTrackingContinuityState tracking_state,
-                                 bool reset_pending = false);
+                                 bool reset_pending = false,
+                                 bool visual_support_sufficient = true);
 
   bool ever_inertial_initialized() const;
   bool inertial_initialized() const;
@@ -50,6 +51,7 @@ public:
   std::uint64_t inertial_ba2_regression_count() const;
   std::uint64_t tracking_loss_after_acceptance_count() const;
   std::uint64_t tracking_gap_after_acceptance_count() const;
+  std::uint64_t visual_support_failure_after_acceptance_count() const;
   double maximum_observed_tracking_interval_seconds() const;
 
 private:
@@ -76,6 +78,7 @@ private:
   std::uint64_t inertial_ba2_regression_count_ = 0;
   std::uint64_t tracking_loss_after_acceptance_count_ = 0;
   std::uint64_t tracking_gap_after_acceptance_count_ = 0;
+  std::uint64_t visual_support_failure_after_acceptance_count_ = 0;
 };
 
 } // namespace ovrs

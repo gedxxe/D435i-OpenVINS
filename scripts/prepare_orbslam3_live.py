@@ -171,6 +171,18 @@ def prepare(args: argparse.Namespace) -> None:
             "backend pin live_maximum_tracking_interval_factor "
             "must be in (1, 10]"
         )
+    minimum_tracked_map_points = parse_int(
+        pin.get("live_minimum_tracked_map_points", ""),
+        "backend pin live_minimum_tracked_map_points",
+    )
+    if (
+        minimum_tracked_map_points <= 0
+        or minimum_tracked_map_points > args.n_features
+    ):
+        raise BenchmarkError(
+            "backend pin live_minimum_tracked_map_points must be in "
+            "(0, n_features]"
+        )
     maximum_preacceptance_map_resets = parse_int(
         pin.get("live_maximum_preacceptance_map_resets", ""),
         "backend pin live_maximum_preacceptance_map_resets",
@@ -244,6 +256,8 @@ def prepare(args: argparse.Namespace) -> None:
         f"{maximum_tracking_interval_seconds}",
         "OVRS.MaximumTrackingIntervalFactor: "
         f"{maximum_tracking_interval_factor}",
+        "OVRS.MinimumTrackedMapPoints: "
+        f"{minimum_tracked_map_points}",
         "OVRS.MaximumPreacceptanceMapResets: "
         f"{maximum_preacceptance_map_resets}",
         'OVRS.TimeOffsetConvention: "t_imu=t_cam+timeshift_cam_imu"',
@@ -271,7 +285,7 @@ def prepare(args: argparse.Namespace) -> None:
     manifest = output / "live_manifest.yaml"
     manifest.write_text(
         "%YAML:1.0\n"
-        'format: "ovrs-orbslam3-live-bundle-v4"\n'
+        'format: "ovrs-orbslam3-live-bundle-v5"\n'
         'state: "PREPARED_NOT_RUN"\n'
         'integration: "PURE_ORB_SLAM3_STEREO_INERTIAL"\n'
         "openvins_pose_consumed: false\n"
@@ -291,6 +305,8 @@ def prepare(args: argparse.Namespace) -> None:
         f"{maximum_tracking_interval_factor}\n"
         "maximum_tracking_interval_seconds: "
         f"{maximum_tracking_interval_seconds}\n"
+        "minimum_tracked_map_points: "
+        f"{minimum_tracked_map_points}\n"
         "maximum_preacceptance_map_resets: "
         f"{maximum_preacceptance_map_resets}\n"
         f"gravity_m_s2: {gravity_m_s2}\n"

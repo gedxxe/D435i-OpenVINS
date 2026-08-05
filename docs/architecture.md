@@ -191,10 +191,13 @@ The isolated [live ORB-SLAM3 adapter](orbslam3_live.md) reuses project capture
 and ordering but does not consume or correct the OpenVINS state. It therefore
 remains pure ORB-SLAM3 rather than the future `T_map_odom` hybrid. Its
 canonical trajectory is published only after inertial BA2 completes and the
-combined inertial-ready state remains stable with zero active-map resets.
-Pre-BA2 visual poses remain in a separate diagnostic file. Any reset,
-inertial/BA2 regression, or loop/global-BA map change after acceptance rejects
-the candidate instead of joining discontinuous map-local pose segments.
+combined inertial-ready state remains stable with zero active-map resets and
+the pinned minimum tracked-map-point support. Pre-BA2 visual poses remain in a
+separate diagnostic file. Any reset, inertial/BA2 regression, insufficient
+visual support, or loop/global-BA map change after acceptance rejects the
+candidate instead of joining discontinuous map-local pose segments. The
+visual-support floor is a continuity gate only; it does not geometrically
+verify correspondences or certify accuracy.
 
 A future globally corrected pose must preserve two frames:
 

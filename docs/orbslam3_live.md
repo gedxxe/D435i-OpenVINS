@@ -119,6 +119,16 @@ translation-dominant initialization motion; close dynamic foreground,
 rotation-heavy motion, and motion blur can leave stereo tracking intact while
 the stereo-inertial initializer repeatedly clears its map.
 
+New live bundle-v5 runs also require the tracked-map-point count to remain at
+or above the `live_minimum_tracked_map_points` backend pin. The current floor
+is 50. It is deliberately below the retained v26 accepted-trajectory minimum
+of 139 and prevents a nominal `Tracking::OK` state with weak map support from
+opening or continuing the canonical stream. Before acceptance, a weak frame
+restarts the full post-BA2 stability window. After acceptance, a weak frame is
+a terminal continuity failure and the candidate remains noncanonical. This is
+a support floor, not proof that the surviving correspondences are
+geometrically correct or that the pose is accurate.
+
 Do not move briefly and then pause to wait for initialization. In this pinned
 upstream logic, the local-mapping initialization clock advances only on
 keyframes whose recent two-step camera-centre translation exceeds 0.05 m. A
@@ -311,12 +321,13 @@ Passing the continuity gate without a physical start/end reference yields
 `LIVE_GATE_PASS_CONTINUITY_NOT_ACCURACY_VALIDATED`. Passing the recorded
 rigid-stop tolerances yields a stronger return-consistency state, but still
 does not establish full-trajectory accuracy without independent ground truth.
-New bundle-v4/runtime-provenance-v5 runs report `CAPTURE_TIME_ATTESTED`.
-Evaluator-v6 additionally recomputes the bounded pre-acceptance and strict
-zero-post-acceptance reset counts from every tracking row.
-Earlier run schemas remain historical evidence only with the evaluator source
-revision and hashes recorded at that time; the current evaluator does not
-retroactively upgrade them. A later binary must never be presented as their
+New bundle-v5/runtime-provenance-v6 runs report `CAPTURE_TIME_ATTESTED`.
+Evaluator-v7 additionally recomputes the bounded pre-acceptance and strict
+zero-post-acceptance reset counts plus the minimum tracked-map-point contract
+from every tracking row. Bundle-v4/runtime-provenance-v5 runs remain
+re-evaluable under their original no-minimum-support contract; evaluator-v7
+reports their minimum as zero and does not retroactively upgrade their
+acceptance. A later binary must never be presented as an older run's
 capture-time executable.
 
 The live process also fails closed when either the raw stereo callback or raw

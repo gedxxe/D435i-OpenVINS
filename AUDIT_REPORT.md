@@ -845,6 +845,37 @@ copies preserve re-evaluation of both the failed attempt and v26 across the
 rebuild; their independent states remain respectively `LIVE_GATE_FAILED` and
 `LIVE_GATE_PASS_CONTINUITY_NOT_ACCURACY_VALIDATED`.
 
+### 2026-08-05 visual-support continuity hardening
+
+The live canonical gate previously treated upstream `Tracking::OK`/`OK_KLT`
+as sufficient visual readiness once inertial BA2 and the stability interval
+passed. The tracking CSV already retained non-null tracked map-point counts,
+but neither the application gate nor the independent evaluator required a
+minimum. A nominal pose state with severely weakened map support could
+therefore remain canonical until upstream declared tracking lost.
+
+New bundle-v5/runtime-provenance-v6 runs pin a minimum of 50 tracked map
+points. Weak support before acceptance restarts the complete post-BA2
+stability interval. Weak support after acceptance is a terminal continuity
+failure, stops publication, retains `INCOMPLETE`, and is independently
+recomputed by evaluator-v7. The retained v26 trace had a minimum of 139 map
+points over its 1,404 accepted rows, so 50 is a conservative floor below that
+observed continuity run rather than a threshold selected to make a failed run
+pass. Bundle-v4 evidence remains re-evaluable under its original zero-floor
+contract and is not retroactively promoted.
+
+Dependency-light regression tests cover pre-acceptance stability restart,
+permanent post-acceptance rejection, evaluator failure attribution, and
+legacy-v4 re-evaluation. The actual ORB-linked Linux build and portable build
+each passed all five registered CTest targets; the dependency-light research
+suite contains 48 passing cases. Generated bundle-v5 settings and manifest
+fields were also checked against the selected serial-bound configuration.
+These build and synthetic results are not a connected-camera result. No new
+physical run has exercised bundle-v5, so this change is code-level fail-closed
+hardening only. It does not establish correspondence correctness, trajectory
+accuracy, initialization repeatability, relocalization, or navigation/flight
+readiness.
+
 ## Historical evidence
 
 See [docs/audit_history.md](docs/audit_history.md) for the full chronology,

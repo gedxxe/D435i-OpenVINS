@@ -73,6 +73,7 @@ FLOAT_TOLERANCE = 1e-6
 class TrackingRow:
     timestamp_s: float
     state: str
+    tracked_map_points: int
     tracking_latency_ms: float
     imu_batch: int
     startup_imu_gate_passed: bool
@@ -92,6 +93,7 @@ class TrackingStats:
     lost_frame_count: int
     tracking_loss_after_acceptance_count: int
     tracking_gap_after_acceptance_count: int
+    visual_support_failure_after_acceptance_count: int
     maximum_observed_tracking_interval_s: float
     accepted_timestamps_s: tuple[float, ...]
     ever_inertial_initialized: bool
@@ -262,6 +264,7 @@ def parse_tracking(
     minimum_stable_s: float,
     maximum_tracking_interval_s: float,
     maximum_preacceptance_map_resets: int,
+    minimum_tracked_map_points: int,
 ) -> TrackingStats:
     raw_rows = read_csv(path, TRACKING_FIELDS)
     rows: list[TrackingRow] = []
@@ -277,6 +280,7 @@ def parse_tracking(
     lost_frame_count = 0
     tracking_loss_after_acceptance_count = 0
     tracking_gap_after_acceptance_count = 0
+    visual_support_failure_after_acceptance_count = 0
     maximum_observed_tracking_interval_s = 0.0
     pending_observed = False
     pending_after_acceptance_observed = False
@@ -310,7 +314,7 @@ def parse_tracking(
         if state not in TRACKING_STATES:
             raise BenchmarkError(f"{prefix}: unsupported tracking state {state}")
         parse_int(raw["tracked_keypoints"], f"{prefix} tracked_keypoints")
-        parse_int(
+        tracked_map_points = parse_int(
             raw["tracked_map_points"], f"{prefix} tracked_map_points"
         )
         tracking_latency_ms = parse_float(
@@ -351,8 +355,15 @@ def parse_tracking(
             raw["trajectory_candidate_accepted"],
             f"{prefix} trajectory_candidate_accepted",
         )
+        visual_support_sufficient = (
+            tracked_map_points >= minimum_tracked_map_points
+        )
         gate_ready = (
-            startup_passed and initialized and ba2 and state in POSE_STATES
+            startup_passed
+            and initialized
+            and ba2
+            and state in POSE_STATES
+            and visual_support_sufficient
         )
         if gate_ready:
             if stable_gate_started_at is None or tracking_gap:
@@ -391,6 +402,7 @@ def parse_tracking(
                 or not ba2
                 or reset_count > maximum_preacceptance_map_resets
                 or reset_pending
+                or not visual_support_sufficient
                 or stable_elapsed + FLOAT_TOLERANCE < minimum_stable_s
             ):
                 raise BenchmarkError(
@@ -406,6 +418,8 @@ def parse_tracking(
                 tracking_loss_after_acceptance_count += 1
             if tracking_gap:
                 tracking_gap_after_acceptance_count += 1
+            if state in POSE_STATES and not visual_support_sufficient:
+                visual_support_failure_after_acceptance_count += 1
 
         if state in POSE_STATES:
             visual_pose_count += 1
@@ -420,6 +434,7 @@ def parse_tracking(
             TrackingRow(
                 timestamp_s=timestamp,
                 state=state,
+                tracked_map_points=tracked_map_points,
                 tracking_latency_ms=tracking_latency_ms,
                 imu_batch=imu_batch,
                 startup_imu_gate_passed=startup_passed,
@@ -456,6 +471,9 @@ def parse_tracking(
         ),
         tracking_gap_after_acceptance_count=(
             tracking_gap_after_acceptance_count
+        ),
+        visual_support_failure_after_acceptance_count=(
+            visual_support_failure_after_acceptance_count
         ),
         maximum_observed_tracking_interval_s=(
             maximum_observed_tracking_interval_s
@@ -931,18 +949,36 @@ def validate_provenance(
     manifest = simple_yaml_map(live_manifest_path)
     pin = simple_yaml_map(backend_pin_path)
     device = simple_yaml_map(device_path)
+    bundle_format = manifest.get("format", "")
+    if bundle_format not in (
+        "ovrs-orbslam3-live-bundle-v4",
+        "ovrs-orbslam3-live-bundle-v5",
+    ):
+        raise BenchmarkError(
+            f"unsupported live bundle format: {bundle_format}"
+        )
+    visual_support_contract = (
+        bundle_format == "ovrs-orbslam3-live-bundle-v5"
+    )
+    trajectory_policy = (
+        "startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
+        "visual_support_continuous_bounded_preacceptance_resets_"
+        "zero_postacceptance_resets_no_postacceptance_map_correction"
+        if visual_support_contract
+        else
+        "startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
+        "bounded_preacceptance_resets_zero_postacceptance_resets_"
+        "no_postacceptance_map_correction"
+    )
     expected_metadata = {
         "mode": "experimental_pure_orbslam3_live",
         "openvins_pose_consumed": "false",
         "global_correction_fed_to_openvins": "false",
-        "trajectory_acceptance_policy":
-            "startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
-            "bounded_preacceptance_resets_zero_postacceptance_resets_"
-            "no_postacceptance_map_correction",
+        "trajectory_acceptance_policy": trajectory_policy,
         "visual_tracking_trajectory_is_diagnostic_only": "true",
     }
     expected_manifest = {
-        "format": "ovrs-orbslam3-live-bundle-v4",
+        "format": bundle_format,
         "state": "PREPARED_NOT_RUN",
         "integration": "PURE_ORB_SLAM3_STEREO_INERTIAL",
         "openvins_pose_consumed": "false",
@@ -995,9 +1031,12 @@ def validate_provenance(
     runtime_provenance_format = metadata.get(
         "runtime_provenance_format", ""
     )
-    if runtime_provenance_format == (
-        "ovrs-orbslam3-live-runtime-provenance-v5"
-    ):
+    expected_runtime_provenance_format = (
+        "ovrs-orbslam3-live-runtime-provenance-v6"
+        if visual_support_contract
+        else "ovrs-orbslam3-live-runtime-provenance-v5"
+    )
+    if runtime_provenance_format == expected_runtime_provenance_format:
         launch_path = run_dir / "launch_provenance.yaml"
         captured_manifest_path = run_dir / "source_live_manifest.yaml"
         require_file(launch_path, "launch provenance", allow_empty=False)
@@ -1112,7 +1151,29 @@ def validate_provenance(
             ),
             f"{key} metadata versus bundle",
         )
+    if visual_support_contract:
+        require_equal(
+            parse_int(
+                require_scalar(
+                    metadata, "minimum_tracked_map_points", "run metadata"
+                ),
+                "minimum_tracked_map_points",
+            ),
+            parse_int(
+                require_scalar(
+                    manifest,
+                    "minimum_tracked_map_points",
+                    "live bundle manifest",
+                ),
+                "minimum_tracked_map_points",
+            ),
+            "minimum_tracked_map_points metadata versus bundle",
+        )
     for pin_key, manifest_key in (
+        (
+            "live_minimum_tracked_map_points",
+            "minimum_tracked_map_points",
+        ),
         (
             "live_maximum_preacceptance_map_resets",
             "maximum_preacceptance_map_resets",
@@ -1135,6 +1196,11 @@ def validate_provenance(
             "maximum_input_stall_seconds",
         ),
     ):
+        if (
+            manifest_key == "minimum_tracked_map_points"
+            and not visual_support_contract
+        ):
+            continue
         require_close(
             parse_float(
                 require_scalar(pin, pin_key, "backend pin"), pin_key,
@@ -1255,6 +1321,20 @@ def evaluate(args: argparse.Namespace) -> None:
         raise BenchmarkError(
             "maximum_preacceptance_map_resets exceeds supported bound"
         )
+    visual_support_contract = (
+        manifest.get("format") == "ovrs-orbslam3-live-bundle-v5"
+    )
+    minimum_tracked_map_points = (
+        parse_int(
+            require_scalar(
+                metadata, "minimum_tracked_map_points", "run metadata"
+            ),
+            "minimum_tracked_map_points",
+            minimum=1,
+        )
+        if visual_support_contract
+        else 0
+    )
     tracking_path = run_dir / "live_tracking_states.csv"
     imu_path = run_dir / "live_imu_excitation.csv"
     visual_path = run_dir / "live_visual_tracking_trajectory_tum.txt"
@@ -1263,6 +1343,7 @@ def evaluate(args: argparse.Namespace) -> None:
         minimum_stable_s,
         maximum_tracking_interval_s,
         maximum_preacceptance_map_resets,
+        minimum_tracked_map_points,
     )
     parse_imu(imu_path, tracking)
     visual = parse_trajectory(
@@ -1325,6 +1406,20 @@ def evaluate(args: argparse.Namespace) -> None:
         summary_int(summary, "tracking_gap_after_acceptance_count"),
         "tracking gap after acceptance count",
     )
+    if visual_support_contract:
+        require_equal(
+            minimum_tracked_map_points,
+            summary_int(summary, "minimum_tracked_map_points"),
+            "minimum tracked map points",
+        )
+        require_equal(
+            tracking.visual_support_failure_after_acceptance_count,
+            summary_int(
+                summary,
+                "visual_support_failure_after_acceptance_count",
+            ),
+            "visual support failure after acceptance count",
+        )
     require_close(
         tracking.maximum_observed_tracking_interval_s,
         parse_float(
@@ -1762,6 +1857,8 @@ def evaluate(args: argparse.Namespace) -> None:
         gate_failures.append("TRACKING_LOSS_AFTER_ACCEPTANCE")
     if tracking.tracking_gap_after_acceptance_count:
         gate_failures.append("TRACKING_GAP_AFTER_ACCEPTANCE")
+    if tracking.visual_support_failure_after_acceptance_count:
+        gate_failures.append("VISUAL_SUPPORT_LOST_AFTER_ACCEPTANCE")
     if not tracking.accepted_timestamps_s:
         gate_failures.append("NO_ACCEPTED_TRAJECTORY_POSES")
     for field in clean_transport_fields:
@@ -1986,7 +2083,7 @@ def evaluate(args: argparse.Namespace) -> None:
     )
     result_lines = [
         "%YAML:1.0",
-        'format: "ovrs-orbslam3-live-evaluation-v6"',
+        'format: "ovrs-orbslam3-live-evaluation-v7"',
         f"state: {yaml_quote(state)}",
         f"live_gate_passed: {bool_yaml(evaluation_passed)}",
         "live_continuity_gate_passed: "
@@ -2034,6 +2131,9 @@ def evaluate(args: argparse.Namespace) -> None:
         f"{tracking.tracking_loss_after_acceptance_count}",
         "tracking_gap_after_acceptance_count: "
         f"{tracking.tracking_gap_after_acceptance_count}",
+        f"minimum_tracked_map_points: {minimum_tracked_map_points}",
+        "visual_support_failure_after_acceptance_count: "
+        f"{tracking.visual_support_failure_after_acceptance_count}",
         "maximum_tracking_interval_seconds: "
         f"{maximum_tracking_interval_s:.9f}",
         "maximum_observed_tracking_interval_seconds: "

@@ -34,7 +34,8 @@ OrbTrajectoryGate::update(double timestamp_s, bool inertial_initialized,
                           std::uint64_t active_map_reset_count,
                           std::uint64_t active_map_change_index,
                           OrbTrackingContinuityState tracking_state,
-                          bool reset_pending) {
+                          bool reset_pending,
+                          bool visual_support_sufficient) {
   if (!std::isfinite(timestamp_s)) {
     throw std::invalid_argument("ORB trajectory timestamp must be finite");
   }
@@ -123,9 +124,15 @@ OrbTrajectoryGate::update(double timestamp_s, bool inertial_initialized,
       ++tracking_loss_after_acceptance_count_;
     }
   }
+  if (acceptance_started_ && tracking_ready &&
+      !visual_support_sufficient) {
+    discontinuity_detected_ = true;
+    ++visual_support_failure_after_acceptance_count_;
+  }
 
   const bool gate_ready =
-      inertial_initialized && inertial_ba2_finished && tracking_ready;
+      inertial_initialized && inertial_ba2_finished && tracking_ready &&
+      visual_support_sufficient;
   if (gate_ready &&
       (!stable_inertial_started_at_s_ || tracking_gap)) {
     stable_inertial_started_at_s_ = timestamp_s;
@@ -230,6 +237,11 @@ OrbTrajectoryGate::tracking_loss_after_acceptance_count() const {
 std::uint64_t
 OrbTrajectoryGate::tracking_gap_after_acceptance_count() const {
   return tracking_gap_after_acceptance_count_;
+}
+
+std::uint64_t
+OrbTrajectoryGate::visual_support_failure_after_acceptance_count() const {
+  return visual_support_failure_after_acceptance_count_;
 }
 
 double

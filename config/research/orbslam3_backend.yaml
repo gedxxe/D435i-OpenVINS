@@ -13,6 +13,11 @@ patch_sha256: "569daedf09fc13fe93d8e68eb2be3c389b21b031c949529f7b03469318eecc87"
 imu_init_acceleration_threshold_m_s2: 0.5
 live_minimum_stable_inertial_seconds: 3.0
 live_maximum_tracking_interval_factor: 3.0
+# A Tracking::OK pose is not canonical unless it also retains this many
+# non-null tracked map points. The retained v26 continuity trace stayed above
+# 139 after acceptance; 50 is deliberately conservative and is a continuity
+# floor, not an accuracy certificate.
+live_minimum_tracked_map_points: 50
 # ORB-SLAM3 may discard an uninitialized map before any canonical pose exists.
 # Bound those retries; every reset after trajectory acceptance remains fatal.
 live_maximum_preacceptance_map_resets: 5

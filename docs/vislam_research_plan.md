@@ -230,6 +230,9 @@ headless and diagnostic:
 - OpenVINS behaviour remains available as an A/B baseline;
 - map construction and optimization cannot block the capture callback or
   ordered IMU/camera ingestion;
+- canonical output requires sustained, provenance-pinned visual map support
+  in addition to backend tracking state, inertial BA2, reset safety, and frame
+  continuity; the support floor is not an accuracy metric;
 - map state and local odometry state remain separate.
 
 The intended transform contract is:

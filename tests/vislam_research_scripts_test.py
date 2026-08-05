@@ -431,8 +431,10 @@ def make_orb_live_run(
     reset: bool = False,
     tracking_loss: bool = False,
     tracking_gap: bool = False,
+    visual_support_loss: bool = False,
+    legacy_schema: bool = False,
 ) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
-    if sum((reset, tracking_loss, tracking_gap)) > 1:
+    if sum((reset, tracking_loss, tracking_gap, visual_support_loss)) > 1:
         raise ValueError("live failure fixtures are mutually exclusive")
     run = root / "live-run"
     run.mkdir()
@@ -452,6 +454,29 @@ def make_orb_live_run(
     vocabulary_hash = hashlib.sha256(vocabulary.read_bytes()).hexdigest()
     settings_hash = hashlib.sha256(settings.read_bytes()).hexdigest()
     backend_commit = "1" * 40
+    bundle_format = (
+        "ovrs-orbslam3-live-bundle-v4"
+        if legacy_schema
+        else "ovrs-orbslam3-live-bundle-v5"
+    )
+    runtime_provenance_format = (
+        "ovrs-orbslam3-live-runtime-provenance-v5"
+        if legacy_schema
+        else "ovrs-orbslam3-live-runtime-provenance-v6"
+    )
+    minimum_visual_support_line = (
+        "" if legacy_schema else "minimum_tracked_map_points: 50\n"
+    )
+    trajectory_policy = (
+        "startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
+        "bounded_preacceptance_resets_zero_postacceptance_resets_"
+        "no_postacceptance_map_correction"
+        if legacy_schema
+        else
+        "startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
+        "visual_support_continuous_bounded_preacceptance_resets_"
+        "zero_postacceptance_resets_no_postacceptance_map_correction"
+    )
     backend_pin = root / "backend.yaml"
     write(
         backend_pin,
@@ -460,6 +485,7 @@ def make_orb_live_run(
         'backend_name: "ORB_SLAM3"\n'
         f'commit: "{backend_commit}"\n'
         f'patch_sha256: "{patch_hash}"\n'
+        "live_minimum_tracked_map_points: 50\n"
         "live_maximum_preacceptance_map_resets: 5\n"
         "live_startup_stationary_seconds: 1.0\n"
         "live_startup_stationary_timeout_seconds: 10.0\n"
@@ -471,7 +497,7 @@ def make_orb_live_run(
     write(
         live_manifest,
         "%YAML:1.0\n"
-        'format: "ovrs-orbslam3-live-bundle-v4"\n'
+        f'format: "{bundle_format}"\n'
         'state: "PREPARED_NOT_RUN"\n'
         'integration: "PURE_ORB_SLAM3_STEREO_INERTIAL"\n'
         "openvins_pose_consumed: false\n"
@@ -486,6 +512,7 @@ def make_orb_live_run(
         "minimum_stable_inertial_seconds: 1.0\n"
         "maximum_tracking_interval_factor: 3.0\n"
         "maximum_tracking_interval_seconds: 1.0\n"
+        f"{minimum_visual_support_line}"
         "maximum_preacceptance_map_resets: 5\n"
         "gravity_m_s2: 9.80665\n"
         "startup_maximum_gravity_error_m_s2: 2.0\n"
@@ -526,7 +553,7 @@ def make_orb_live_run(
         "%YAML:1.0\n"
         'mode: "experimental_pure_orbslam3_live"\n'
         "runtime_provenance_format: "
-        '"ovrs-orbslam3-live-runtime-provenance-v5"\n'
+        f'"{runtime_provenance_format}"\n'
         "openvins_pose_consumed: false\n"
         "global_correction_fed_to_openvins: false\n"
         'calibration_state: "BOOTSTRAP_UNVERIFIED"\n'
@@ -547,6 +574,7 @@ def make_orb_live_run(
         "minimum_stable_inertial_seconds: 1.000000\n"
         "maximum_tracking_interval_factor: 3.000000\n"
         "maximum_tracking_interval_seconds: 1.000000\n"
+        f"{minimum_visual_support_line}"
         "maximum_preacceptance_map_resets: 5\n"
         "gravity_m_s2: 9.806650\n"
         "startup_maximum_gravity_error_m_s2: 2.000000\n"
@@ -556,9 +584,7 @@ def make_orb_live_run(
         "startup_maximum_gyro_magnitude_rad_s: 0.100000\n"
         "maximum_input_stall_seconds: 1.000000\n"
         "trajectory_acceptance_policy: "
-        '"startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_'
-        'bounded_preacceptance_resets_zero_postacceptance_resets_'
-        'no_postacceptance_map_correction"\n'
+        f'"{trajectory_policy}"\n'
         "closed_loop_reference_start_policy: "
         '"post_acceptance_gate_open_operator_cue"\n'
         "visual_tracking_trajectory_is_diagnostic_only: true\n",
@@ -616,6 +642,13 @@ def make_orb_live_run(
             "0.2,OK,100,50,2.0,5,1,1,1,0,0,0,0.0,0\n"
             "1.2,OK,100,50,2.0,5,1,1,1,0,0,0,1.0,1\n"
             "2.4,OK,100,50,2.0,5,1,1,1,0,0,0,0.0,0\n"
+        )
+    elif visual_support_loss:
+        tracking_rows = (
+            "0.1,NOT_INITIALIZED,100,0,2.0,5,1,0,0,0,0,0,0.0,0\n"
+            "0.2,OK,100,50,2.0,5,1,1,1,0,0,0,0.0,0\n"
+            "1.2,OK,100,50,2.0,5,1,1,1,0,0,0,1.0,1\n"
+            "1.3,OK,100,49,2.0,5,1,1,1,0,0,0,0.0,0\n"
         )
     else:
         tracking_rows = (
@@ -706,6 +739,12 @@ def make_orb_live_run(
             "1.2 0 0 0 0 0 0 1\n"
             "2.4 0.02 0 0 0 0 0 1\n"
         )
+    elif visual_support_loss:
+        visual_rows = (
+            "0.2 0 0 0 0 0 0 1\n"
+            "1.2 0 0 0 0 0 0 1\n"
+            "1.3 0.02 0 0 0 0 0 1\n"
+        )
     else:
         visual_rows = (
             "0.2 0 0 0 0 0 0 1\n"
@@ -717,6 +756,7 @@ def make_orb_live_run(
             "2.4 0.020 0 0 0 0 0 1\n"
         )
     write(run / "live_visual_tracking_trajectory_tum.txt", visual_rows)
+    visual_support_failure_after_acceptance_count = 0
     if reset:
         write(run / "live_camera_trajectory_candidate_tum.txt", "")
         write(run / "INCOMPLETE", "ORB-SLAM3 live run incomplete.\n")
@@ -794,6 +834,36 @@ def make_orb_live_run(
         discontinuity = "true"
         acceptance_started = "true"
         last_tracking_state = "OK"
+        visual_support_failure_after_acceptance_count = 0
+    elif visual_support_loss:
+        write(
+            run / "live_camera_trajectory_candidate_tum.txt",
+            "1.2 0 0 0 0 0 0 1\n",
+        )
+        write(run / "INCOMPLETE", "ORB-SLAM3 live run incomplete.\n")
+        run_state = "EXPERIMENTAL_RUN_FAILED"
+        accepted_count = 0
+        candidate_count = 1
+        ever_ba2 = "true"
+        final_ba2 = "true"
+        reset_count = 0
+        pending_observed = "false"
+        inertial_regressions = 0
+        ba2_regressions = 0
+        accepted_file = ""
+        rejected_file = "live_camera_trajectory_candidate_tum.txt"
+        runtime_failure = (
+            "ORB-SLAM3 visual map support fell below the canonical "
+            "continuity floor after trajectory acceptance"
+        )
+        visual_count = 3
+        lost_count = 0
+        tracking_loss_after_acceptance_count = 0
+        tracking_gap_after_acceptance_count = 0
+        discontinuity = "true"
+        acceptance_started = "true"
+        last_tracking_state = "OK"
+        visual_support_failure_after_acceptance_count = 1
     else:
         write(
             run / "live_camera_trajectory_tum.txt",
@@ -823,6 +893,7 @@ def make_orb_live_run(
         discontinuity = "false"
         acceptance_started = "true"
         last_tracking_state = "OK"
+        visual_support_failure_after_acceptance_count = 0
     write(
         run / "run_summary.yaml",
         "%YAML:1.0\n"
@@ -842,6 +913,9 @@ def make_orb_live_run(
         f"{tracking_loss_after_acceptance_count}\n"
         "tracking_gap_after_acceptance_count: "
         f"{tracking_gap_after_acceptance_count}\n"
+        "minimum_tracked_map_points: 50\n"
+        "visual_support_failure_after_acceptance_count: "
+        f"{visual_support_failure_after_acceptance_count}\n"
         "maximum_tracking_interval_seconds: 1.000000\n"
         "maximum_observed_tracking_interval_seconds: "
         f"{maximum_observed_interval:.6f}\n"
@@ -2152,7 +2226,7 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
             self.assertIn("live_gate_passed: true", manifest)
             self.assertIn("live_continuity_gate_passed: true", manifest)
             self.assertIn(
-                'format: "ovrs-orbslam3-live-evaluation-v6"', manifest
+                'format: "ovrs-orbslam3-live-evaluation-v7"', manifest
             )
             self.assertIn("canonical_trajectory_rows: 6", manifest)
             self.assertIn(
@@ -2187,6 +2261,26 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                 manifest,
             )
             self.assertIn("vocabulary_sha256:", manifest)
+
+    def test_legacy_v4_live_bundle_remains_re_evaluable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = make_orb_live_run(root, legacy_schema=True)
+            output = root / "evaluation.yaml"
+
+            result = run_live_evaluator(inputs, output)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = output.read_text(encoding="utf-8")
+            self.assertIn(
+                'state: "LIVE_GATE_PASS_CONTINUITY_NOT_ACCURACY_VALIDATED"',
+                manifest,
+            )
+            self.assertIn("minimum_tracked_map_points: 0", manifest)
+            self.assertIn(
+                "visual_support_failure_after_acceptance_count: 0",
+                manifest,
+            )
 
     def test_endpoint_windows_reject_single_frame_false_return(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2500,6 +2594,30 @@ class EvaluateOrbslam3LiveRunTests(unittest.TestCase):
                 manifest,
             )
             self.assertIn("TRAJECTORY_ACCEPTANCE_DISCONTINUITY", manifest)
+            self.assertIn("CANONICAL_TRAJECTORY_ABSENT", manifest)
+
+    def test_post_acceptance_visual_support_loss_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = make_orb_live_run(root, visual_support_loss=True)
+            output = root / "evaluation.yaml"
+
+            result = run_live_evaluator(inputs, output)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = output.read_text(encoding="utf-8")
+            self.assertIn('state: "LIVE_GATE_FAILED"', manifest)
+            self.assertIn(
+                "VISUAL_SUPPORT_LOST_AFTER_ACCEPTANCE", manifest
+            )
+            self.assertIn("minimum_tracked_map_points: 50", manifest)
+            self.assertIn(
+                "visual_support_failure_after_acceptance_count: 1",
+                manifest,
+            )
+            self.assertIn(
+                "TRAJECTORY_ACCEPTANCE_DISCONTINUITY", manifest
+            )
             self.assertIn("CANONICAL_TRAJECTORY_ABSENT", manifest)
 
     def test_pre_acceptance_lost_state_does_not_fail_continuity(self) -> None:

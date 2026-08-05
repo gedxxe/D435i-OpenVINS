@@ -6,6 +6,16 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Hardened the isolated live ORB-SLAM3 canonical-trajectory gate with a
+  provenance-pinned visual-support floor. New bundle-v5/runtime-provenance-v6
+  runs require at least 50 non-null tracked map points throughout the
+  post-BA2 stability window and every accepted pose. Falling below that floor
+  after acceptance is a terminal discontinuity with an independently
+  recomputed evaluator-v7 failure. The retained v26 trace stayed above 139
+  accepted map points, but no new connected-camera run has validated the
+  changed binary; the floor is a continuity safeguard, not an accuracy claim.
+  Evaluator-v7 keeps bundle-v4 evidence re-evaluable under its original
+  no-minimum-support contract rather than retroactively upgrading it.
 - Added a serial-bound live startup IMU gate after a connected D435i session
   produced a stable approximately-2g accelerometer stream. Independent raw SDK
   and project captures reproduced it; a non-persistent hardware reset restored

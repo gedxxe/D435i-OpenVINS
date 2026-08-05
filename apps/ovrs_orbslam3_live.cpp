@@ -176,6 +176,7 @@ struct OrbLiveSettings {
   double minimum_stable_inertial_seconds = 0.0;
   double maximum_tracking_interval_seconds = 0.0;
   double maximum_tracking_interval_factor = 0.0;
+  std::uint64_t minimum_tracked_map_points = 0;
   std::uint64_t maximum_preacceptance_map_resets = 0;
   double gravity_m_s2 = 0.0;
   double startup_maximum_gravity_error_m_s2 = 0.0;
@@ -232,6 +233,14 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
       storage, "OVRS.MaximumTrackingIntervalSeconds");
   result.maximum_tracking_interval_factor = required_setting<double>(
       storage, "OVRS.MaximumTrackingIntervalFactor");
+  const int minimum_tracked_map_points =
+      required_setting<int>(storage, "OVRS.MinimumTrackedMapPoints");
+  if (minimum_tracked_map_points <= 0) {
+    throw std::runtime_error(
+        "ORB minimum tracked map points must be positive");
+  }
+  result.minimum_tracked_map_points =
+      static_cast<std::uint64_t>(minimum_tracked_map_points);
   const int maximum_preacceptance_map_resets = required_setting<int>(
       storage, "OVRS.MaximumPreacceptanceMapResets");
   if (maximum_preacceptance_map_resets < 0) {
@@ -274,6 +283,7 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
       !std::isfinite(result.maximum_tracking_interval_factor) ||
       result.maximum_tracking_interval_factor <= 1.0 ||
       result.maximum_tracking_interval_factor > 10.0 ||
+      result.minimum_tracked_map_points > 10000 ||
       result.maximum_preacceptance_map_resets > 20 ||
       !std::isfinite(result.gravity_m_s2) || result.gravity_m_s2 <= 0.0 ||
       !std::isfinite(result.startup_maximum_gravity_error_m_s2) ||
@@ -531,7 +541,7 @@ int main(int argc, char **argv) {
     }
     for (const auto &[key, expected] :
          std::vector<std::pair<std::string, std::string>>{
-             {"format", "ovrs-orbslam3-live-bundle-v4"},
+             {"format", "ovrs-orbslam3-live-bundle-v5"},
              {"state", "PREPARED_NOT_RUN"},
              {"integration", "PURE_ORB_SLAM3_STEREO_INERTIAL"},
              {"openvins_pose_consumed", "false"},
@@ -541,6 +551,8 @@ int main(int argc, char **argv) {
              {"backend_commit", orb_settings.backend_commit},
              {"backend_patch_sha256", orb_settings.backend_patch_sha256},
              {"camera_stride", std::to_string(orb_settings.camera_stride)},
+             {"minimum_tracked_map_points",
+              std::to_string(orb_settings.minimum_tracked_map_points)},
              {"settings_sha256", settings_sha256}}) {
       require_yaml_value(live_manifest_text, key, expected,
                          "ORB live bundle manifest");
@@ -811,6 +823,7 @@ int main(int argc, char **argv) {
         orb_settings.maximum_preacceptance_map_resets);
     bool trajectory_acceptance_announced = false;
     std::uint64_t announced_active_map_reset_count = 0;
+    bool weak_visual_support_announced = false;
     bool terminal_gate_stop_requested = false;
     ImuExcitationStats excitation_stats;
     ovrs::ImuStartupGate startup_gate(
@@ -919,6 +932,14 @@ int main(int argc, char **argv) {
           const bool current_tracking_lost =
               latest_state == ORB_SLAM3::Tracking::LOST ||
               latest_state == ORB_SLAM3::Tracking::RECENTLY_LOST;
+          const auto keypoints = slam.GetTrackedKeyPointsUn().size();
+          const auto map_points = slam.GetTrackedMapPoints();
+          const auto tracked_map_points = static_cast<std::size_t>(
+              std::count_if(map_points.begin(), map_points.end(),
+                            [](const auto *point) { return point != nullptr; }));
+          const bool visual_support_sufficient =
+              current_tracking_pose_valid &&
+              tracked_map_points >= orb_settings.minimum_tracked_map_points;
           const bool startup_imu_gate_passed =
               startup_gate.status().state ==
               ovrs::ImuStartupGateState::Passed;
@@ -935,7 +956,8 @@ int main(int argc, char **argv) {
               current_inertial_ba2_finished,
               current_active_map_reset_count,
               current_active_map_change_index,
-              current_tracking_continuity, current_reset_pending);
+              current_tracking_continuity, current_reset_pending,
+              visual_support_sufficient);
           if (current_active_map_reset_count >
               announced_active_map_reset_count) {
             announced_active_map_reset_count =
@@ -957,9 +979,26 @@ int main(int argc, char **argv) {
             std::cout
                 << "ORB-SLAM3 canonical trajectory gate OPEN: inertial BA2 "
                    "is stable after bounded initialization retries, with no "
-                   "post-acceptance reset. Begin any "
+                   "post-acceptance reset and sustained visual map support. "
+                   "Begin any "
                    "closed-loop return-to-start motion only now.\n"
                 << std::flush;
+          }
+          if (!gate_status.acceptance_started &&
+              current_inertial_ba2_finished &&
+              current_tracking_pose_valid && !visual_support_sufficient &&
+              !weak_visual_support_announced) {
+            weak_visual_support_announced = true;
+            std::cerr
+                << "ORB-SLAM3 initialization WAIT: tracking is pose-valid "
+                   "but visual support is "
+                << tracked_map_points << '/'
+                << orb_settings.minimum_tracked_map_points
+                << " tracked map points. Keep a rigid textured scene in both "
+                   "IR cameras and continue smooth translation.\n"
+                << std::flush;
+          } else if (visual_support_sufficient) {
+            weak_visual_support_announced = false;
           }
           if (!terminal_gate_stop_requested &&
               trajectory_gate.preacceptance_reset_limit_exceeded()) {
@@ -996,11 +1035,6 @@ int main(int argc, char **argv) {
             excitation_stats.add_orb_delta(
                 orb_acceleration_delta, orb_acceleration_threshold);
           }
-          const auto keypoints = slam.GetTrackedKeyPointsUn().size();
-          const auto map_points = slam.GetTrackedMapPoints();
-          const auto tracked_map_points = static_cast<std::size_t>(
-              std::count_if(map_points.begin(), map_points.end(),
-                            [](const auto *point) { return point != nullptr; }));
           states << std::fixed << std::setprecision(9) << frame.timestamp
                  << ',' << tracking_state_name(latest_state) << ','
                  << keypoints << ',' << tracked_map_points << ','
@@ -1163,7 +1197,7 @@ int main(int argc, char **argv) {
             "%YAML:1.0\n"
         "mode: \"experimental_pure_orbslam3_live\"\n"
         "runtime_provenance_format: "
-        "\"ovrs-orbslam3-live-runtime-provenance-v5\"\n"
+        "\"ovrs-orbslam3-live-runtime-provenance-v6\"\n"
         "openvins_pose_consumed: false\n"
         "global_correction_fed_to_openvins: false\n"
         "viewer: " +
@@ -1203,6 +1237,8 @@ int main(int argc, char **argv) {
             "\nmaximum_tracking_interval_factor: " +
             std::to_string(
                 orb_settings.maximum_tracking_interval_factor) +
+            "\nminimum_tracked_map_points: " +
+            std::to_string(orb_settings.minimum_tracked_map_points) +
             "\nmaximum_preacceptance_map_resets: " +
             std::to_string(
                 orb_settings.maximum_preacceptance_map_resets) +
@@ -1225,7 +1261,8 @@ int main(int argc, char **argv) {
             "\nmaximum_input_stall_seconds: " +
             std::to_string(orb_settings.maximum_input_stall_seconds) +
             "\ntrajectory_acceptance_policy: "
-            "\"startup_imu_pass_post_inertial_ba2_stable_tracking_continuous_"
+            "\"startup_imu_pass_post_inertial_ba2_stable_tracking_minimum_"
+            "visual_support_continuous_"
             "bounded_preacceptance_resets_zero_postacceptance_resets_"
             "no_postacceptance_map_correction\"\n"
             "closed_loop_reference_start_policy: "
@@ -1348,6 +1385,11 @@ int main(int argc, char **argv) {
       runtime_failure =
           "ORB-SLAM3 frame interval exceeded the continuity limit "
           "after trajectory acceptance";
+    } else if (
+        trajectory_gate.visual_support_failure_after_acceptance_count() != 0) {
+      runtime_failure =
+          "ORB-SLAM3 visual map support fell below the canonical continuity "
+          "floor after trajectory acceptance";
     } else if (trajectory_gate.discontinuity_detected()) {
       runtime_failure =
           "ORB-SLAM3 trajectory discontinuity was detected";
@@ -1612,6 +1654,12 @@ int main(int argc, char **argv) {
         "\ntracking_gap_after_acceptance_count: " +
         std::to_string(
             trajectory_gate.tracking_gap_after_acceptance_count()) +
+        "\nminimum_tracked_map_points: " +
+        std::to_string(orb_settings.minimum_tracked_map_points) +
+        "\nvisual_support_failure_after_acceptance_count: " +
+        std::to_string(
+            trajectory_gate
+                .visual_support_failure_after_acceptance_count()) +
         "\ntrajectory_acceptance_started: " +
         std::string(trajectory_gate.acceptance_started() ? "true"
                                                          : "false") +

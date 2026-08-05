@@ -1205,4 +1205,33 @@ TEST_CASE("ORB trajectory gate permanently rejects a post-acceptance gap") {
   REQUIRE(!gate.update(2.2, true, true, 0, 0, ready).accept_pose);
 }
 
+TEST_CASE("ORB trajectory gate requires sustained visual map support") {
+  ovrs::OrbTrajectoryGate gate(1.0, 1.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready, false, true)
+               .accept_pose);
+  REQUIRE(!gate.update(0.5, true, true, 0, 0, ready, false, false)
+               .accept_pose);
+  REQUIRE(!gate.update(1.0, true, true, 0, 0, ready, false, true)
+               .accept_pose);
+  REQUIRE(gate.update(2.0, true, true, 0, 0, ready, false, true)
+              .accept_pose);
+}
+
+TEST_CASE("ORB trajectory gate rejects weak visual support after acceptance") {
+  ovrs::OrbTrajectoryGate gate(1.0, 1.0);
+  const auto ready = ovrs::OrbTrackingContinuityState::PoseValid;
+  REQUIRE(!gate.update(0.0, true, true, 0, 0, ready, false, true)
+               .accept_pose);
+  REQUIRE(gate.update(1.0, true, true, 0, 0, ready, false, true)
+              .accept_pose);
+  const auto weak =
+      gate.update(1.1, true, true, 0, 0, ready, false, false);
+  REQUIRE(!weak.accept_pose);
+  REQUIRE(weak.discontinuity_detected);
+  REQUIRE(gate.visual_support_failure_after_acceptance_count() == 1);
+  REQUIRE(!gate.update(1.2, true, true, 0, 0, ready, false, true)
+               .accept_pose);
+}
+
 int main() { return test::run(); }
