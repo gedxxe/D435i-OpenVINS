@@ -407,6 +407,10 @@ for that exact hardware, configuration, and test.
       commit/patch/pin, atlas frame policy, library, and vocabulary.
 - [ ] The ELF runner resolves the exact `libORB_SLAM3.so` recorded in the
       result manifest.
+- [ ] `IMU.InitLowMotionResetSeconds` in generated settings matches
+      `imu_init_low_motion_reset_seconds` in the adapter/live manifest and the
+      reviewed backend pin. This dwell delays only the upstream pre-BA2
+      low-motion reset; it does not permit any reset through this gate.
 - [ ] Atlas load and save completed, every detected merge finished, and the
       final atlas contains exactly one nonempty map.
 - [ ] The active session reached terminal input coverage and inertial BA2 with

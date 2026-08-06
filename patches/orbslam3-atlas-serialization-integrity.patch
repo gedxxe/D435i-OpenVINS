@@ -1,3 +1,15 @@
+diff --git a/include/LocalMapping.h b/include/LocalMapping.h
+index dd04a3d..95fbb57 100644
+--- a/include/LocalMapping.h
++++ b/include/LocalMapping.h
+@@ -189,6 +189,7 @@ protected:
+     int mNumKFCulling;
+ 
+     float mTinit;
++    float mLowMotionTime;
+ 
+     int countRefinement;
+ 
 diff --git a/include/System.h b/include/System.h
 index 872c86e..ac40675 100644
 --- a/include/System.h
@@ -59,7 +71,7 @@ index 872c86e..ac40675 100644
  
      //
 diff --git a/include/Tracking.h b/include/Tracking.h
-index 863c98e..d74b6ef 100644
+index 863c98e..2d614db 100644
 --- a/include/Tracking.h
 +++ b/include/Tracking.h
 @@ -101,6 +101,7 @@ public:
@@ -70,11 +82,12 @@ index 863c98e..d74b6ef 100644
  
      //DEBUG
      void SaveSubTrajectory(string strNameFile_frames, string strNameFile_kf, string strFolder="");
-@@ -170,6 +171,9 @@ public:
+@@ -170,6 +171,10 @@ public:
      double t0vis; // time-stamp of first inserted keyframe
      double t0IMU; // time-stamp of IMU initialization
      bool mFastInit = false;
 +    float mImuInitAccelerationThreshold = 0.5f;
++    float mImuInitLowMotionResetSeconds = 0.0f;
 +    float mLastImuInitAccelerationDelta = 0.0f;
 +    bool mLastImuInitAccelerationDeltaAvailable = false;
  
@@ -372,7 +385,7 @@ index 293ab48..9d87d42 100644
      mpImuPreintegrated = &mBackupImuPreintegrated;
  
 diff --git a/src/LocalMapping.cc b/src/LocalMapping.cc
-index 53df332..ef19578 100644
+index 53df332..8d77854 100644
 --- a/src/LocalMapping.cc
 +++ b/src/LocalMapping.cc
 @@ -31,7 +31,7 @@ namespace ORB_SLAM3
@@ -384,6 +397,71 @@ index 53df332..ef19578 100644
      mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
      mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
  {
+@@ -40,6 +40,7 @@ LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular,
+     mbBadImu = false;
+ 
+     mTinit = 0.f;
++    mLowMotionTime = 0.f;
+ 
+     mNumLM = 0;
+     mNumKFCulling=0;
+@@ -130,14 +131,37 @@ void LocalMapping::Run()
+                     {
+                         float dist = (mpCurrentKeyFrame->mPrevKF->GetCameraCenter() - mpCurrentKeyFrame->GetCameraCenter()).norm() +
+                                 (mpCurrentKeyFrame->mPrevKF->mPrevKF->GetCameraCenter() - mpCurrentKeyFrame->mPrevKF->GetCameraCenter()).norm();
++                        const float keyframeDelta =
++                            mpCurrentKeyFrame->mTimeStamp -
++                            mpCurrentKeyFrame->mPrevKF->mTimeStamp;
+ 
+                         if(dist>0.05)
+-                            mTinit += mpCurrentKeyFrame->mTimeStamp - mpCurrentKeyFrame->mPrevKF->mTimeStamp;
++                            mTinit += keyframeDelta;
++                        if(dist<0.02)
++                        {
++                            if(keyframeDelta>0.f)
++                                mLowMotionTime += keyframeDelta;
++                        }
++                        else
++                            mLowMotionTime = 0.f;
+                         if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2())
+                         {
+-                            if((mTinit<10.f) && (dist<0.02))
++                            const float lowMotionResetSeconds =
++                                mpTracker->mImuInitLowMotionResetSeconds;
++                            const bool lowMotionPersistent =
++                                lowMotionResetSeconds<=0.f ||
++                                mLowMotionTime>=lowMotionResetSeconds;
++                            if((mTinit<10.f) && (dist<0.02) &&
++                               lowMotionPersistent)
+                             {
+-                                cout << "Not enough motion for initializing. Reseting..." << endl;
++                                cout << "Not enough sustained motion for "
++                                        "initializing. Resetting active map "
++                                     << "(distance=" << dist
++                                     << " m, low_motion=" << mLowMotionTime
++                                     << " s, required="
++                                     << lowMotionResetSeconds
++                                     << " s, qualified_motion=" << mTinit
++                                     << " s)..." << endl;
+                                 unique_lock<mutex> lock(mMutexReset);
+                                 mbResetRequestedActiveMap = true;
+                                 mpMapToReset = mpCurrentKeyFrame->GetMap();
+@@ -1113,6 +1137,7 @@ void LocalMapping::ResetIfRequested()
+ 
+             // Inertial parameters
+             mTinit = 0.f;
++            mLowMotionTime = 0.f;
+             mbNotBA2 = true;
+             mbNotBA1 = true;
+             mbBadImu=false;
+@@ -1130,6 +1155,7 @@ void LocalMapping::ResetIfRequested()
+ 
+             // Inertial parameters
+             mTinit = 0.f;
++            mLowMotionTime = 0.f;
+             mbNotBA2 = true;
+             mbNotBA1 = true;
+             mbBadImu=false;
 diff --git a/src/Map.cc b/src/Map.cc
 index f1f8cd0..19d9402 100644
 --- a/src/Map.cc
@@ -821,7 +899,7 @@ index 60d9c51..2155883 100644
  } //namespace ORB_SLAM
 -
 diff --git a/src/Tracking.cc b/src/Tracking.cc
-index 5191451..24599b6 100644
+index 5191451..5c7aa2d 100644
 --- a/src/Tracking.cc
 +++ b/src/Tracking.cc
 @@ -29,7 +29,10 @@
@@ -835,7 +913,7 @@ index 5191451..24599b6 100644
  
  #include <mutex>
  #include <chrono>
-@@ -94,6 +97,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
+@@ -94,6 +97,32 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
          }
      }
  
@@ -851,12 +929,24 @@ index 5191451..24599b6 100644
 +            if(!std::isfinite(mImuInitAccelerationThreshold) || mImuInitAccelerationThreshold <= 0.0f)
 +                throw std::runtime_error("IMU.InitAccelerationThreshold must be finite and positive");
 +        }
++        cv::FileNode lowMotionResetNode =
++            fSettings["IMU.InitLowMotionResetSeconds"];
++        if(!lowMotionResetNode.empty())
++        {
++            if(!lowMotionResetNode.isReal())
++                throw std::runtime_error("IMU.InitLowMotionResetSeconds must be real");
++            mImuInitLowMotionResetSeconds = lowMotionResetNode.real();
++            if(!std::isfinite(mImuInitLowMotionResetSeconds) ||
++               mImuInitLowMotionResetSeconds <= 0.0f)
++                throw std::runtime_error(
++                    "IMU.InitLowMotionResetSeconds must be finite and positive");
++        }
 +    }
 +
      initID = 0; lastID = 0;
      mbInitWith3KFs = false;
      mnNumDataset = 0;
-@@ -1454,6 +1471,7 @@ bool Tracking::GetStepByStep()
+@@ -1454,6 +1483,7 @@ bool Tracking::GetStepByStep()
  Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
  {
      //cout << "GrabImageStereo" << endl;
@@ -864,7 +954,7 @@ index 5191451..24599b6 100644
  
      mImGray = imRectLeft;
      cv::Mat imGrayRight = imRectRight;
-@@ -1907,10 +1925,11 @@ void Tracking::Track()
+@@ -1907,10 +1937,11 @@ void Tracking::Track()
              MonocularInitialization();
          }
  
@@ -878,7 +968,7 @@ index 5191451..24599b6 100644
              mLastFrame = Frame(mCurrentFrame);
              return;
          }
-@@ -2344,9 +2363,19 @@ void Tracking::StereoInitialization()
+@@ -2344,9 +2375,19 @@ void Tracking::StereoInitialization()
                  return;
              }
  
@@ -900,7 +990,7 @@ index 5191451..24599b6 100644
                  return;
              }
  
-@@ -4065,6 +4094,13 @@ int Tracking::GetMatchesInliers()
+@@ -4065,6 +4106,13 @@ int Tracking::GetMatchesInliers()
      return mnMatchesInliers;
  }
  

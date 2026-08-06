@@ -150,14 +150,19 @@ at 0.384 m/s and 1.822 rad/s. The wider pins are therefore discontinuity
 envelopes for this research workflow, not measured vehicle dynamics, motion
 commands, or trajectory-accuracy bounds.
 
-Do not move briefly and then pause to wait for initialization. In this pinned
-upstream logic, the local-mapping initialization clock advances only on
-keyframes whose recent two-step camera-centre translation exceeds 0.05 m. A
-recent two-step translation below 0.02 m can reset the active map while that
-qualified clock is still below 10 seconds, while BA2 is scheduled only after
-the clock exceeds 15 seconds. After the startup gate passes, continue smooth
-translation with parallax and modest rotation for the entire initialization;
-stop or hold only after `canonical trajectory gate OPEN` is printed.
+Do not move briefly and then pause to wait for initialization. In the pinned
+backend, the local-mapping initialization clock advances only on keyframes
+whose recent two-step camera-centre translation exceeds 0.05 m. Upstream
+requests an active-map reset after one decision below 0.02 m while that
+qualified clock is still below 10 seconds. The project patch retains those
+motion thresholds but requires the low-motion keyframe condition to persist
+for the backend-pinned `imu_init_low_motion_reset_seconds` (currently 1.0 s).
+Any keyframe decision at or above 0.02 m clears the dwell. BA2 is still
+scheduled only after the qualified clock exceeds 15 seconds, and the
+acceptance gate still requires zero applied resets. After the startup gate
+passes, continue smooth translation with parallax and modest rotation for the
+entire initialization; stop or hold only after
+`canonical trajectory gate OPEN` is printed.
 
 Press Ctrl+C to stop. The callback only copies and enqueues frames. ORB
 tracking runs on the ordered dispatcher thread, and

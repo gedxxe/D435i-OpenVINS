@@ -995,6 +995,64 @@ relocalization, navigation, or flight readiness. Both the ORB-linked Linux
 build and portable-core build passed all five registered CTest targets,
 including all 54 dependency-light research cases.
 
+### 2026-08-06 ORB pre-BA2 reset persistence audit
+
+The reset audit traced camera subsampling, IMU batching, transform direction,
+camera/IMU time offset, gyro scale, and the pinned upstream initialization
+path before changing logic. The 30 Hz ORB path still drains every queued IMU
+sample through the submitted camera timestamp; it does not retain only one IMU
+sample per selected frame. The calibrated -4.900203 ms offset, `T_b_c1`
+direction, and post-RSUSB gyro scale of 1.0 therefore remain unchanged.
+
+The concrete defect was in pinned `LocalMapping.cc`. Before BA2, one keyframe
+decision whose recent two-step camera-centre translation was below 0.02 m
+could request an active-map reset while the motion-qualified initialization
+clock was below 10 seconds. Retained failed live diagnostics include reset
+windows with appreciable one-second visual path/net motion, so one brief
+low-motion decision was not a robust reason to discard all accumulated map
+state.
+
+The reviewed backend now reads
+`IMU.InitLowMotionResetSeconds` from generated settings. The current backend
+pin is 1.0 second. Consecutive low-motion keyframe intervals accumulate this
+dwell; a keyframe decision at or above 0.02 m clears it. The existing 0.02 m
+and 0.05 m translation thresholds, 0.5 m/s2 acceleration threshold, BA1/BA2
+scheduling, live canonical gate, reset counter, and zero-reset evaluator
+policy are unchanged. Reset diagnostics now report recent distance,
+low-motion dwell, required dwell, and qualified-motion time.
+
+Two identical calibrated-offset, stride-three replays of retained v20 used
+the new library. Each completed terminal input coverage with 3,167 of 3,593
+frame poses, one IMU-map reset, zero local-map tracking failures, two created
+maps, and one BA1/BA2 completion. The old same-data baseline had 117 frame
+poses, 18 resets, nine local-map failures, 28 created maps, and no BA2. Both
+new v20 runs remain `TRACKING_GATE_FAILED` because the single residual reset
+still violates the predeclared gate.
+
+The established positive-control recording was also replayed with the new
+library. It retained one created/final map, zero reset, zero local-map
+failure, terminal coverage, and one BA1/BA2 completion. Its state is
+`TRACKING_PASS_LOOP_CORRECTION_NOT_REFERENCE_VALIDATED`; the observed loop
+correction has no independent reference and is not promoted as correct.
+
+The patch SHA-256 is
+`e3515be65acf1e7bace9faf0a16dbf3b02fbedbdb80ebd140dff410e94e66860`,
+the rebuilt `libORB_SLAM3.so` SHA-256 is
+`2ad752040aa7d1fc6d04a751e9c42b792ee7928cfc2f5d5c4945aeb4da039717`,
+and the rebuilt live executable SHA-256 is
+`119ad715a5c38f3f1a8e19e1b04f254334c5eb9f97000b3b029def345ad4d933`.
+Both Linux-release and portable-core passed all five registered CTest
+targets. `preflight_ubuntu.sh --require-build` passed with zero errors and one
+warning because neither `rs-enumerate-devices` nor `ovrs_inspect` could verify
+a connected D435i. No new moving-camera run or external ground truth was
+available.
+Consequently this establishes an offline reset-robustness improvement, not
+physical trajectory accuracy, drift bounds, navigation readiness, or live
+repeatability. Because the patch and shared-library hashes changed, the prior
+atlas save/reload/merge attestation is historical evidence for the old binary;
+a new provenance-matched atlas chain is required before persistence is
+re-promoted.
+
 ## Historical evidence
 
 See [docs/audit_history.md](docs/audit_history.md) for the full chronology,

@@ -6,6 +6,21 @@ current tree; they must not be read as claims that historical Git tags exist.
 
 ## Unreleased
 
+- Hardened the pinned ORB-SLAM3 pre-BA2 active-map reset without relaxing the
+  zero-reset acceptance gate. Upstream previously discarded the active map
+  after a single keyframe decision with less than 0.02 m recent translation
+  while its motion-qualified initialization clock was below 10 seconds. The
+  generated backend setting now requires 1.0 continuous second of such
+  low-motion keyframe time before requesting that reset; any qualifying
+  translation clears the dwell. On two identical v20 replays, resets fell
+  from the retained baseline's 18 to 1, local-map failures fell from 9 to 0,
+  and BA2 completed, but both runs remained correctly rejected by the
+  unchanged zero-reset gate. The established positive-control recording still
+  passed with one map, zero reset/failure, and BA1/BA2 complete. These are
+  identical-data robustness results without external ground truth, not an
+  accuracy or live-navigation claim. The changed shared library also
+  invalidates the old atlas reload attestation until a fresh save/reload/merge
+  chain is completed with its new hash.
 - Kept the native ORB-SLAM3 Current Frame viewer live while stereo-inertial
   initialization is still waiting for motion. The pinned backend now refreshes
   `FrameDrawer` before returning from a failed `NOT_INITIALIZED` attempt; it

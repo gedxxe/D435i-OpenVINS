@@ -234,6 +234,9 @@ stable, and an active-map reset, post-acceptance tracking loss or frame gap,
 inertial-state regression, or later global map correction prevents publication
 of a continuous accepted trajectory. The maximum frame interval is derived
 from the pinned nominal ORB rate rather than hidden in the executable. A
+backend-pinned one-second persistent-low-motion guard prevents a single brief
+pre-BA2 pause from immediately discarding the developing map; it does not
+relax the zero-reset acceptance gate or the BA2 requirement. A
 stationary camera still refreshes the native Current Frame IR viewer while it
 reports `TRYING TO INITIALIZE`; this viewer availability does not imply an
 accepted pose or inertial initialization. A

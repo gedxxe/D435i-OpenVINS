@@ -9,7 +9,7 @@ set(OVRS_LIBREALSENSE_TAG "v2.57.3")
 set(OVRS_LIBREALSENSE_COMMIT "5e046e509995cda79b42d89fa95ab65f90678641")
 set(OVRS_LIBREALSENSE_PATCH_SHA256 "bba36fac64f045dda5d6c9f2cf4422d74d31ee430070f715252f86b2b28e003f")
 set(OVRS_ORBSLAM3_COMMIT "4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4")
-set(OVRS_ORBSLAM3_PATCH_SHA256 "74d9a08f12bef7aa59607986d5614244c9fdd0a970074fe957f6cef8edbcd6f3")
+set(OVRS_ORBSLAM3_PATCH_SHA256 "e3515be65acf1e7bace9faf0a16dbf3b02fbedbdb80ebd140dff410e94e66860")
 # External calibration tools are not runtime dependencies. These commits make
 # the documented isolated ROS1/Docker workflow reproducible.
 set(OVRS_KALIBR_COMMIT "1f60227442d25e36365ef5f72cd80b9666d73467")

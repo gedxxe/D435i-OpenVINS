@@ -9,8 +9,13 @@ license: "GPL-3.0-or-later"
 runner: "Examples/Stereo-Inertial/stereo_inertial_euroc"
 vocabulary: "Vocabulary/ORBvoc.txt"
 patch: "patches/orbslam3-atlas-serialization-integrity.patch"
-patch_sha256: "74d9a08f12bef7aa59607986d5614244c9fdd0a970074fe957f6cef8edbcd6f3"
+patch_sha256: "e3515be65acf1e7bace9faf0a16dbf3b02fbedbdb80ebd140dff410e94e66860"
 imu_init_acceleration_threshold_m_s2: 0.5
+# Upstream resets an initialized-but-pre-BA2 map after one low-motion
+# keyframe decision. Require consecutive low-motion keyframe time instead, so
+# one brief pause cannot discard a developing map. This delays only reset;
+# BA2 and every canonical-pose gate remain unchanged.
+imu_init_low_motion_reset_seconds: 1.0
 live_minimum_stable_inertial_seconds: 3.0
 live_maximum_tracking_interval_factor: 3.0
 # A Tracking::OK pose is not canonical unless it also retains this many

@@ -421,6 +421,7 @@ def write_settings(
     initial_fast: int,
     minimum_fast: int,
     imu_init_acceleration_threshold: float,
+    imu_init_low_motion_reset_seconds: float,
     atlas_load_name: str | None,
     atlas_save_name: str | None,
     provenance_lines: tuple[str, ...] = (),
@@ -478,6 +479,10 @@ def write_settings(
     if atlas_lines:
         atlas_lines.append("")
 
+    low_motion_reset_text = f"{imu_init_low_motion_reset_seconds:.17g}"
+    if "." not in low_motion_reset_text and "e" not in low_motion_reset_text.lower():
+        low_motion_reset_text += ".0"
+
     content = "\n".join(
         (
             "%YAML:1.0",
@@ -514,6 +519,8 @@ def write_settings(
             f"IMU.Frequency: {int(round(values['update_rate']))}.0",
             "IMU.InitAccelerationThreshold: "
             f"{imu_init_acceleration_threshold:.17g}",
+            "IMU.InitLowMotionResetSeconds: "
+            f"{low_motion_reset_text}",
             "",
             "# Untuned upstream EuRoC extractor baseline.",
             f"ORBextractor.nFeatures: {n_features}",
@@ -723,6 +730,17 @@ def prepare(args: argparse.Namespace) -> None:
     if imu_init_acceleration_threshold <= 0:
         raise BenchmarkError(
             "backend pin imu_init_acceleration_threshold_m_s2 must be positive"
+        )
+    imu_init_low_motion_reset_seconds = parse_decimal(
+        pin.get("imu_init_low_motion_reset_seconds", ""),
+        "backend pin imu_init_low_motion_reset_seconds",
+    )
+    if (
+        imu_init_low_motion_reset_seconds <= 0
+        or imu_init_low_motion_reset_seconds > 10
+    ):
+        raise BenchmarkError(
+            "backend pin imu_init_low_motion_reset_seconds must be in (0, 10]"
         )
     backend_commit = pin.get("commit", "")
     if len(backend_commit) != 40 or any(
@@ -954,6 +972,7 @@ def prepare(args: argparse.Namespace) -> None:
         args.initial_fast_threshold,
         args.minimum_fast_threshold,
         float(imu_init_acceleration_threshold),
+        float(imu_init_low_motion_reset_seconds),
         atlas_input_name,
         args.save_atlas_name,
     )
@@ -1073,6 +1092,10 @@ def prepare(args: argparse.Namespace) -> None:
                 f"last_imu_timestamp_ns: {last_imu_ns}",
                 f"source_camera_fps: {source_fps}",
                 f"adapted_camera_fps: {adapted_fps}",
+                (
+                    "imu_init_low_motion_reset_seconds: "
+                    f"{imu_init_low_motion_reset_seconds}"
+                ),
                 f"orb_n_features: {args.n_features}",
                 (
                     "orb_initial_fast_threshold: "

@@ -148,6 +148,17 @@ def prepare(args: argparse.Namespace) -> None:
         raise BenchmarkError(
             "backend pin imu_init_acceleration_threshold_m_s2 must be positive"
         )
+    imu_init_low_motion_reset_seconds = parse_decimal(
+        pin.get("imu_init_low_motion_reset_seconds", ""),
+        "backend pin imu_init_low_motion_reset_seconds",
+    )
+    if (
+        imu_init_low_motion_reset_seconds <= 0
+        or imu_init_low_motion_reset_seconds > 10
+    ):
+        raise BenchmarkError(
+            "backend pin imu_init_low_motion_reset_seconds must be in (0, 10]"
+        )
     minimum_stable_inertial_seconds = parse_decimal(
         pin.get("live_minimum_stable_inertial_seconds", ""),
         "backend pin live_minimum_stable_inertial_seconds",
@@ -284,6 +295,8 @@ def prepare(args: argparse.Namespace) -> None:
         f"{maximum_pose_angular_speed_rad_s}",
         "OVRS.MaximumPreacceptanceMapResets: "
         f"{maximum_preacceptance_map_resets}",
+        "OVRS.InitLowMotionResetSeconds: "
+        f"{imu_init_low_motion_reset_seconds}",
         'OVRS.TimeOffsetConvention: "t_imu=t_cam+timeshift_cam_imu"',
         'OVRS.OutputPose: "T_atlas_world_camera0"',
     )
@@ -302,6 +315,7 @@ def prepare(args: argparse.Namespace) -> None:
         args.initial_fast_threshold,
         args.minimum_fast_threshold,
         float(imu_init_acceleration_threshold),
+        float(imu_init_low_motion_reset_seconds),
         None,
         args.save_atlas_name,
         provenance,
@@ -323,6 +337,8 @@ def prepare(args: argparse.Namespace) -> None:
         f"orb_camera_fps: {feed_fps}\n"
         "imu_init_acceleration_threshold_m_s2: "
         f"{imu_init_acceleration_threshold}\n"
+        "imu_init_low_motion_reset_seconds: "
+        f"{imu_init_low_motion_reset_seconds}\n"
         "minimum_stable_inertial_seconds: "
         f"{minimum_stable_inertial_seconds}\n"
         "maximum_tracking_interval_factor: "

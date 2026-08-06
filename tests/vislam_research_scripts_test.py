@@ -1500,6 +1500,9 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
         self.assertIn("GetActiveMapResetCount()", patch)
         self.assertIn("bool System::IsResetPending()", patch)
         self.assertIn("IMU.InitAccelerationThreshold", patch)
+        self.assertIn("IMU.InitLowMotionResetSeconds", patch)
+        self.assertIn("mLowMotionTime>=lowMotionResetSeconds", patch)
+        self.assertIn("Not enough sustained motion for", patch)
         self.assertIn("mbShutdownInProgress", patch)
         self.assertIn("mShutdownCondition.wait", patch)
         self.assertIn(
@@ -1590,6 +1593,9 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
             self.assertIn("Camera.fps: 30", settings)
             self.assertIn("IMU.InitAccelerationThreshold: 0.5", settings)
             self.assertIn(
+                "IMU.InitLowMotionResetSeconds: 1.0", settings
+            )
+            self.assertIn(
                 "OVRS.MinimumStableInertialSeconds: 3.0", settings
             )
             self.assertIn(
@@ -1619,6 +1625,9 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
                 "minimum_stable_inertial_seconds: 3.0", manifest
             )
             self.assertIn(
+                "imu_init_low_motion_reset_seconds: 1.0", manifest
+            )
+            self.assertIn(
                 "maximum_tracking_interval_factor: 3.0", manifest
             )
             self.assertIn(
@@ -1643,6 +1652,9 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn('state: "PREPARED_NOT_RUN"', manifest)
+            self.assertIn(
+                "imu_init_low_motion_reset_seconds: 1.0", manifest
+            )
             self.assertIn(
                 'camera_time_offset_policy: "calibrated"', manifest
             )
@@ -1677,6 +1689,9 @@ class PrepareOrbslam3BenchmarkTests(unittest.TestCase):
             )
             settings = (output / "orbslam3_settings.yaml").read_text(
                 encoding="utf-8"
+            )
+            self.assertIn(
+                "IMU.InitLowMotionResetSeconds: 1.0", settings
             )
             self.assertIn("Camera.fps: 90", settings)
             self.assertIn("0.095", settings)

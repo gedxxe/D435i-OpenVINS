@@ -173,6 +173,7 @@ struct OrbLiveSettings {
   int camera_stride = 0;
   double camera_imu_offset_s = 0.0;
   double imu_init_acceleration_threshold_m_s2 = 0.0;
+  double imu_init_low_motion_reset_seconds = 0.0;
   double minimum_stable_inertial_seconds = 0.0;
   double maximum_tracking_interval_seconds = 0.0;
   double maximum_tracking_interval_factor = 0.0;
@@ -229,6 +230,8 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
       storage, "OVRS.CameraImuTimeOffsetSeconds");
   result.imu_init_acceleration_threshold_m_s2 =
       required_setting<double>(storage, "IMU.InitAccelerationThreshold");
+  result.imu_init_low_motion_reset_seconds =
+      required_setting<double>(storage, "IMU.InitLowMotionResetSeconds");
   result.minimum_stable_inertial_seconds = required_setting<double>(
       storage, "OVRS.MinimumStableInertialSeconds");
   result.maximum_tracking_interval_seconds = required_setting<double>(
@@ -279,6 +282,9 @@ OrbLiveSettings load_orb_settings(const std::filesystem::path &path) {
       std::abs(result.camera_imu_offset_s) > 0.1 ||
       !std::isfinite(result.imu_init_acceleration_threshold_m_s2) ||
       result.imu_init_acceleration_threshold_m_s2 <= 0.0 ||
+      !std::isfinite(result.imu_init_low_motion_reset_seconds) ||
+      result.imu_init_low_motion_reset_seconds <= 0.0 ||
+      result.imu_init_low_motion_reset_seconds > 10.0 ||
       !std::isfinite(result.minimum_stable_inertial_seconds) ||
       result.minimum_stable_inertial_seconds <= 0.0 ||
       result.minimum_stable_inertial_seconds > 60.0 ||
@@ -577,6 +583,12 @@ int main(int argc, char **argv) {
         ovrs::simple_yaml_scalar(live_manifest_text,
                                  "minimum_stable_inertial_seconds"),
         "live manifest minimum_stable_inertial_seconds");
+    const double manifest_imu_init_low_motion_reset_seconds =
+        ovrs::parse_double_strict(
+            ovrs::simple_yaml_scalar(
+                live_manifest_text,
+                "imu_init_low_motion_reset_seconds"),
+            "live manifest imu_init_low_motion_reset_seconds");
     const double manifest_offset = ovrs::parse_double_strict(
         ovrs::simple_yaml_scalar(live_manifest_text,
                                  "camera_imu_time_offset_s"),
@@ -638,6 +650,8 @@ int main(int argc, char **argv) {
             "live manifest maximum_input_stall_seconds");
     if (std::abs(manifest_stability -
                  orb_settings.minimum_stable_inertial_seconds) > 1e-9 ||
+        std::abs(manifest_imu_init_low_motion_reset_seconds -
+                 orb_settings.imu_init_low_motion_reset_seconds) > 1e-9 ||
         std::abs(manifest_maximum_tracking_interval -
                  orb_settings.maximum_tracking_interval_seconds) > 1e-9 ||
         std::abs(manifest_maximum_tracking_interval_factor -
@@ -1313,6 +1327,9 @@ int main(int argc, char **argv) {
             "\nimu_init_acceleration_threshold_m_s2: " +
             std::to_string(
                 orb_settings.imu_init_acceleration_threshold_m_s2) +
+            "\nimu_init_low_motion_reset_seconds: " +
+            std::to_string(
+                orb_settings.imu_init_low_motion_reset_seconds) +
             "\nminimum_stable_inertial_seconds: " +
             std::to_string(
                 orb_settings.minimum_stable_inertial_seconds) +
@@ -1669,6 +1686,9 @@ int main(int argc, char **argv) {
         "\norb_imu_init_acceleration_threshold_m_s2: " +
         std::to_string(
             orb_settings.imu_init_acceleration_threshold_m_s2) +
+        "\norb_imu_init_low_motion_reset_seconds: " +
+        std::to_string(
+            orb_settings.imu_init_low_motion_reset_seconds) +
         "\norb_imu_init_acceleration_observed_frames: " +
         std::to_string(excitation_stats.orb_observed_frames) +
         "\norb_imu_init_acceleration_pass_frames: " +
